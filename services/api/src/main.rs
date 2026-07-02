@@ -62,7 +62,7 @@ fn response_for_request_line(request_line: &str) -> String {
 
 fn json_response(status: &str, body: &str) -> String {
     format!(
-        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )
 }
@@ -78,6 +78,7 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 200 OK"));
         assert!(response.contains(r#""status":"ok""#));
         assert!(response.contains("Content-Type: application/json"));
+        assert!(response.contains("Access-Control-Allow-Origin: *"));
     }
 
     #[test]

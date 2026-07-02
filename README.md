@@ -109,9 +109,9 @@ Frontend:
 
 - TypeScript.
 - React.
-- Vite.
-- TanStack Query.
-- React Router.
+- Next.js (App Router).
+- Tailwind CSS.
+- shadcn/ui.
 
 Infrastructure:
 
@@ -407,7 +407,7 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5433/drive_clone cargo run
 # 3. Run the web app (in another terminal)
 cd apps/web
 npm install
-npm run dev   # http://localhost:5173, talks to http://localhost:8080 by default
+npm run dev   # http://localhost:3000, talks to http://localhost:8080 by default
 ```
 
 Environment examples live in `services/api/.env.example` and `apps/web/.env.example`.
@@ -428,11 +428,11 @@ npm test
 
 Implemented so far:
 
-- Landing page, signup, and login (English UI) with a protected `/drive` shell.
+- Landing page, signup, and login (English UI) with a protected `/drive` shell, built on Next.js + Tailwind CSS + shadcn/ui.
 - Rust API on Axum + SQLx + PostgreSQL: `POST /auth/signup`, `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, and a DB-aware `GET /health`.
 - Argon2 password hashing; opaque bearer session tokens stored hashed (SHA-256) with 30-day expiry.
 - Auth contract in `contracts/auth.md`; migrations in `services/api/migrations`.
-- Gate tests: 14 API tests (validation, token, and full HTTP auth flows against real Postgres) and 11 web tests.
+- Gate tests: 14 API tests (validation, token, and full HTTP auth flows against real Postgres) and 15 web tests.
 - Repo-connected Railway deployments for the API and web services.
 
 Next milestone: file upload, folder browsing, and download (Milestone 1 continues).

@@ -2,6 +2,7 @@ import type { Metadata } from "next"
 import { Bricolage_Grotesque, IBM_Plex_Mono, Inter } from "next/font/google"
 
 import "./globals.css"
+import { TooltipProvider } from "@/components/ui/tooltip"
 import { AuthProvider } from "@/lib/auth"
 import { cn } from "@/lib/utils"
 
@@ -44,7 +45,9 @@ export default function RootLayout({
       )}
     >
       <body>
-        <AuthProvider>{children}</AuthProvider>
+        <TooltipProvider>
+          <AuthProvider>{children}</AuthProvider>
+        </TooltipProvider>
       </body>
     </html>
   )

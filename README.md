@@ -397,12 +397,20 @@ Track:
 Requirements: Rust, Node 20+, Docker.
 
 ```bash
-# 1. Start Postgres (host port 5433 to avoid clashing with a local install)
+# 1. Start Postgres and MinIO
 docker compose up -d
 
 # 2. Run the API (migrations run automatically on boot)
 cd services/api
-DATABASE_URL=postgres://postgres:postgres@localhost:5433/drive_clone cargo run
+DATABASE_URL=postgres://postgres:postgres@localhost:5433/drive_clone \
+S3_ENDPOINT_URL=http://localhost:9000 \
+S3_PUBLIC_ENDPOINT_URL=http://localhost:9000 \
+S3_BUCKET=drive-clone \
+S3_REGION=us-east-1 \
+S3_ACCESS_KEY_ID=minioadmin \
+S3_SECRET_ACCESS_KEY=minioadmin \
+CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000 \
+cargo run
 
 # 3. Run the web app (in another terminal)
 cd apps/web
@@ -411,6 +419,7 @@ npm run dev   # http://localhost:3000, talks to http://localhost:8080 by default
 ```
 
 Environment examples live in `services/api/.env.example` and `apps/web/.env.example`.
+If the web dev server uses another port, add that exact origin to `CORS_ALLOWED_ORIGINS`, for example `http://localhost:3100`.
 
 ### Tests
 
@@ -418,6 +427,10 @@ Environment examples live in `services/api/.env.example` and `apps/web/.env.exam
 # API: unit + integration tests (integration tests need the compose Postgres up)
 cd services/api
 DATABASE_URL=postgres://postgres:postgres@localhost:5433/drive_clone cargo test
+
+# Upload smoke against the running API and MinIO
+cd ../..
+bash docs/evals/minio-upload-smoke.sh
 
 # Web: vitest
 cd apps/web
@@ -430,9 +443,10 @@ Implemented so far:
 
 - Landing page, signup, and login (English UI) with a protected `/drive` shell, built on Next.js + Tailwind CSS + shadcn/ui.
 - Rust API on Axum + SQLx + PostgreSQL: `POST /auth/signup`, `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, and a DB-aware `GET /health`.
+- File upload backend: `POST /files/uploads`, `POST /files/{file_id}/complete`, `GET /files`, and `GET /files/{file_id}/download`.
 - Argon2 password hashing; opaque bearer session tokens stored hashed (SHA-256) with 30-day expiry.
-- Auth contract in `contracts/auth.md`; migrations in `services/api/migrations`.
-- Gate tests: 14 API tests (validation, token, and full HTTP auth flows against real Postgres) and 15 web tests.
+- Auth contract in `contracts/auth.md`; files contract in `contracts/files.md`; migrations in `services/api/migrations`.
+- Gate tests: API validation/token tests plus full HTTP auth/file flows against real Postgres, and web tests.
 - Repo-connected Railway deployments for the API and web services.
 
 Next milestone: file upload, folder browsing, and download (Milestone 1 continues).

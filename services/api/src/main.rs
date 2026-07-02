@@ -1,6 +1,9 @@
 mod auth;
+mod files;
+mod storage;
 
 use std::env;
+use std::sync::Arc;
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -12,7 +15,38 @@ use sqlx::postgres::PgPoolOptions;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
+use storage::ObjectStorage;
+
+const DEFAULT_MAX_FILE_SIZE_BYTES: i64 = 15 * 1024 * 1024 * 1024;
+const DEFAULT_PRESIGNED_URL_TTL_SECONDS: i64 = 900;
+
+#[derive(Clone)]
+pub struct AppState {
+    pub pool: PgPool,
+    pub storage: Arc<dyn ObjectStorage>,
+    pub max_file_size_bytes: i64,
+    pub presigned_url_ttl_seconds: i64,
+}
+
 pub fn app(pool: PgPool) -> Router {
+    app_with_storage(pool, Arc::new(storage::DisabledStorage))
+}
+
+pub fn app_with_storage(pool: PgPool, storage: Arc<dyn ObjectStorage>) -> Router {
+    let state = AppState {
+        pool,
+        storage,
+        max_file_size_bytes: env_i64("MAX_FILE_SIZE_BYTES", DEFAULT_MAX_FILE_SIZE_BYTES),
+        presigned_url_ttl_seconds: env_i64(
+            "PRESIGNED_URL_TTL_SECONDS",
+            DEFAULT_PRESIGNED_URL_TTL_SECONDS,
+        ),
+    };
+
+    app_with_state(state)
+}
+
+pub fn app_with_state(state: AppState) -> Router {
     Router::new()
         .route("/", get(root))
         .route("/health", get(health))
@@ -20,9 +54,13 @@ pub fn app(pool: PgPool) -> Router {
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
         .route("/auth/me", get(auth::me))
+        .route("/files/uploads", post(files::create_upload))
+        .route("/files", get(files::list_files))
+        .route("/files/{file_id}/complete", post(files::complete_upload))
+        .route("/files/{file_id}/download", get(files::download_file))
         .layer(TraceLayer::new_for_http())
         .layer(cors_layer())
-        .with_state(pool)
+        .with_state(state)
 }
 
 fn cors_layer() -> CorsLayer {
@@ -44,8 +82,8 @@ async fn root() -> impl IntoResponse {
     }))
 }
 
-async fn health(State(pool): State<PgPool>) -> impl IntoResponse {
-    match sqlx::query("SELECT 1").execute(&pool).await {
+async fn health(State(state): State<AppState>) -> impl IntoResponse {
+    match sqlx::query("SELECT 1").execute(&state.pool).await {
         Ok(_) => (
             StatusCode::OK,
             Json(serde_json::json!({"status": "ok", "service": "drive-clone-api"})),
@@ -58,6 +96,13 @@ async fn health(State(pool): State<PgPool>) -> impl IntoResponse {
             )
         }
     }
+}
+
+fn env_i64(name: &str, default: i64) -> i64 {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
 }
 
 #[tokio::main]
@@ -88,8 +133,11 @@ async fn main() {
         .await
         .expect("failed to bind address");
 
+    let storage =
+        Arc::new(storage::S3Storage::from_env().expect("S3 storage env vars must be set"));
+
     tracing::info!("drive-clone-api listening on {address}");
-    axum::serve(listener, app(pool))
+    axum::serve(listener, app_with_storage(pool, storage))
         .await
         .expect("server crashed");
 }

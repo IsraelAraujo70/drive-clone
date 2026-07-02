@@ -18,6 +18,47 @@ export type AuthResponse = {
   token: string
 }
 
+export type FileRecord = {
+  id: string
+  filename: string
+  content_type: string
+  size_bytes: number
+  checksum_sha256: string | null
+  object_key: string
+  state: "pending" | "complete"
+  created_at: string
+  completed_at: string | null
+}
+
+export type CreateUploadInput = {
+  filename: string
+  content_type: string
+  size_bytes: number
+  checksum_sha256?: string | null
+}
+
+export type CreateUploadResponse = {
+  file_id: string
+  upload_url: string
+  object_key: string
+  expires_at: string
+}
+
+export type ListFilesResponse = {
+  files: FileRecord[]
+}
+
+export type DownloadResponse = {
+  download_url: string
+  expires_at: string
+}
+
+export type DirectUploadProgress = {
+  loaded: number
+  total: number
+  percent: number
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -65,6 +106,49 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return data as T
 }
 
+export function uploadFileDirect(
+  uploadUrl: string,
+  file: File,
+  onProgress?: (progress: DirectUploadProgress) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+
+    xhr.upload.addEventListener("progress", (event) => {
+      if (!event.lengthComputable) {
+        return
+      }
+
+      onProgress?.({
+        loaded: event.loaded,
+        total: event.total,
+        percent: Math.round((event.loaded / event.total) * 100),
+      })
+    })
+
+    xhr.addEventListener("load", () => {
+      if (xhr.status >= 200 && xhr.status < 400) {
+        resolve()
+        return
+      }
+
+      reject(new Error(`Direct upload failed with status ${xhr.status}`))
+    })
+
+    xhr.addEventListener("error", () => {
+      reject(new Error("Direct upload failed"))
+    })
+
+    xhr.addEventListener("abort", () => {
+      reject(new Error("Direct upload aborted"))
+    })
+
+    xhr.open("PUT", uploadUrl)
+    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream")
+    xhr.send(file)
+  })
+}
+
 export const api = {
   signup: (input: { email: string; password: string; display_name: string }) =>
     request<AuthResponse>("/auth/signup", { method: "POST", body: input }),
@@ -72,5 +156,16 @@ export const api = {
     request<AuthResponse>("/auth/login", { method: "POST", body: input }),
   logout: (token: string) => request<void>("/auth/logout", { method: "POST", token }),
   me: (token: string) => request<User>("/auth/me", { token }),
+  createUpload: (token: string, input: CreateUploadInput) =>
+    request<CreateUploadResponse>("/files/uploads", {
+      method: "POST",
+      token,
+      body: input,
+    }),
+  completeUpload: (token: string, fileId: string) =>
+    request<FileRecord>(`/files/${fileId}/complete`, { method: "POST", token }),
+  listFiles: (token: string) => request<ListFilesResponse>("/files", { token }),
+  createDownload: (token: string, fileId: string) =>
+    request<DownloadResponse>(`/files/${fileId}/download`, { token }),
   health: () => request<{ status: string; service: string }>("/health"),
 }

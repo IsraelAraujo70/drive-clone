@@ -17,7 +17,9 @@ const TOKEN_KEY = "drive_clone_token"
 
 type AuthContextValue = {
   user: User | null
+  token: string | null
   loading: boolean
+  refreshUser: () => Promise<User | null>
   signup: (input: {
     email: string
     password: string
@@ -31,6 +33,7 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
+  const [token, setToken] = useState<string | null>(null)
   // Starts true and settles on the client; the stored token is only readable there.
   const [loading, setLoading] = useState(true)
   const tokenRef = useRef<string | null>(null)
@@ -44,6 +47,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ? api.me(stored).then(
           (me) => {
             if (!cancelled) {
+              setToken(stored)
               setUser(me)
             }
           },
@@ -70,19 +74,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const applyAuth = (response: AuthResponse) => {
     localStorage.setItem(TOKEN_KEY, response.token)
     tokenRef.current = response.token
+    setToken(response.token)
     setUser(response.user)
     setLoading(false)
   }
 
+  const refreshUser = async () => {
+    const currentToken = tokenRef.current
+    if (!currentToken) {
+      return null
+    }
+
+    const me = await api.me(currentToken)
+    setUser(me)
+    return me
+  }
+
   const value: AuthContextValue = {
     user,
+    token,
     loading,
+    refreshUser,
     signup: async (input) => applyAuth(await api.signup(input)),
     login: async (input) => applyAuth(await api.login(input)),
     logout: async () => {
       const token = tokenRef.current
       localStorage.removeItem(TOKEN_KEY)
       tokenRef.current = null
+      setToken(null)
       setUser(null)
       if (token) {
         await api.logout(token).catch(() => undefined)

@@ -18,6 +18,8 @@ use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::AppState;
+
 const SESSION_TTL_DAYS: i64 = 30;
 
 const USER_COLUMNS: &str =
@@ -46,6 +48,11 @@ pub enum ApiError {
     EmailTaken,
     InvalidCredentials,
     Unauthorized,
+    QuotaExceeded,
+    FileTooLarge,
+    FileNotFound,
+    InvalidFileState,
+    StorageError,
     Internal,
 }
 
@@ -59,9 +66,11 @@ impl From<sqlx::Error> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, code, message) = match self {
-            ApiError::Validation(message) => {
-                (StatusCode::UNPROCESSABLE_ENTITY, "validation_error", message)
-            }
+            ApiError::Validation(message) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "validation_error",
+                message,
+            ),
             ApiError::EmailTaken => (
                 StatusCode::CONFLICT,
                 "email_taken",
@@ -76,6 +85,31 @@ impl IntoResponse for ApiError {
                 StatusCode::UNAUTHORIZED,
                 "unauthorized",
                 "Missing or invalid session token",
+            ),
+            ApiError::QuotaExceeded => (
+                StatusCode::CONFLICT,
+                "quota_exceeded",
+                "Not enough storage quota is available",
+            ),
+            ApiError::FileTooLarge => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "file_too_large",
+                "File exceeds the maximum allowed size",
+            ),
+            ApiError::FileNotFound => (
+                StatusCode::NOT_FOUND,
+                "file_not_found",
+                "File was not found",
+            ),
+            ApiError::InvalidFileState => (
+                StatusCode::CONFLICT,
+                "invalid_file_state",
+                "File is not in the expected state",
+            ),
+            ApiError::StorageError => (
+                StatusCode::BAD_GATEWAY,
+                "storage_error",
+                "Object storage could not satisfy the request",
             ),
             ApiError::Internal => (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -112,10 +146,13 @@ pub struct Auth {
     pub token_hash: String,
 }
 
-impl FromRequestParts<PgPool> for Auth {
+impl FromRequestParts<AppState> for Auth {
     type Rejection = ApiError;
 
-    async fn from_request_parts(parts: &mut Parts, pool: &PgPool) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let token = parts
             .headers
             .get(AUTHORIZATION)
@@ -135,7 +172,7 @@ impl FromRequestParts<PgPool> for Auth {
         );
         let user = sqlx::query_as::<_, User>(&query)
             .bind(&token_hash)
-            .fetch_optional(pool)
+            .fetch_optional(&state.pool)
             .await?
             .ok_or(ApiError::Unauthorized)?;
 
@@ -144,7 +181,7 @@ impl FromRequestParts<PgPool> for Auth {
 }
 
 pub async fn signup(
-    State(pool): State<PgPool>,
+    State(state): State<AppState>,
     Json(request): Json<SignupRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let email = request.email.trim().to_lowercase();
@@ -165,7 +202,7 @@ pub async fn signup(
         .bind(&email)
         .bind(&password_hash)
         .bind(&display_name)
-        .fetch_one(&pool)
+        .fetch_one(&state.pool)
         .await
     {
         Ok(user) => user,
@@ -175,19 +212,19 @@ pub async fn signup(
         Err(error) => return Err(error.into()),
     };
 
-    let token = create_session(&pool, user.id).await?;
+    let token = create_session(&state.pool, user.id).await?;
     Ok((StatusCode::CREATED, Json(AuthResponse { user, token })))
 }
 
 pub async fn login(
-    State(pool): State<PgPool>,
+    State(state): State<AppState>,
     Json(request): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let email = request.email.trim().to_lowercase();
     let query = format!("SELECT {USER_COLUMNS}, password_hash FROM users WHERE email = $1");
     let row = sqlx::query_as::<_, UserWithPassword>(&query)
         .bind(&email)
-        .fetch_optional(&pool)
+        .fetch_optional(&state.pool)
         .await?;
 
     let password = request.password;
@@ -210,15 +247,17 @@ pub async fn login(
         }
     };
 
-    let user = user.filter(|_| verified).ok_or(ApiError::InvalidCredentials)?;
-    let token = create_session(&pool, user.id).await?;
+    let user = user
+        .filter(|_| verified)
+        .ok_or(ApiError::InvalidCredentials)?;
+    let token = create_session(&state.pool, user.id).await?;
     Ok((StatusCode::OK, Json(AuthResponse { user, token })))
 }
 
-pub async fn logout(State(pool): State<PgPool>, auth: Auth) -> Result<StatusCode, ApiError> {
+pub async fn logout(State(state): State<AppState>, auth: Auth) -> Result<StatusCode, ApiError> {
     sqlx::query("DELETE FROM sessions WHERE token_hash = $1")
         .bind(&auth.token_hash)
-        .execute(&pool)
+        .execute(&state.pool)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -336,7 +375,16 @@ mod tests {
 
     #[test]
     fn email_validation_rejects_malformed_addresses() {
-        for email in ["", "no-at-sign", "@example.com", "user@", "user@nodot", "user@.com", "user@domain.", "a b@example.com"] {
+        for email in [
+            "",
+            "no-at-sign",
+            "@example.com",
+            "user@",
+            "user@nodot",
+            "user@.com",
+            "user@domain.",
+            "a b@example.com",
+        ] {
             assert!(validate_email(email).is_err(), "should reject {email:?}");
         }
     }
@@ -551,8 +599,7 @@ mod tests {
         let (status, _) = request(app.clone(), "GET", "/auth/me", None, None).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
 
-        let (status, _) =
-            request(app, "GET", "/auth/me", Some("forged-token"), None).await;
+        let (status, _) = request(app, "GET", "/auth/me", Some("forged-token"), None).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 

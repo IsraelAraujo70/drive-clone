@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { API_BASE_URL, ApiError, api } from "./api"
+import { API_BASE_URL, ApiError, api, uploadFileDirect } from "./api"
 
 function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -76,11 +76,221 @@ describe("api client", () => {
     await expect(api.logout("secret-token")).resolves.toBeUndefined()
   })
 
+  it("creates uploads with authenticated JSON metadata", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(201, {
+        file_id: "file-1",
+        upload_url: "https://storage.example/upload",
+        object_key: "objects/file-1",
+        expires_at: "2026-07-02T12:00:00Z",
+      }),
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    const result = await api.createUpload("secret-token", {
+      filename: "report.pdf",
+      content_type: "application/pdf",
+      size_bytes: 42,
+      checksum_sha256: null,
+    })
+
+    expect(result.file_id).toBe("file-1")
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe(`${API_BASE_URL}/files/uploads`)
+    expect(init.method).toBe("POST")
+    expect(init.headers.Authorization).toBe("Bearer secret-token")
+    expect(init.headers["Content-Type"]).toBe("application/json")
+    expect(JSON.parse(init.body)).toEqual({
+      filename: "report.pdf",
+      content_type: "application/pdf",
+      size_bytes: 42,
+      checksum_sha256: null,
+    })
+  })
+
+  it("completes uploads, lists files, and requests download URLs", async () => {
+    const completedFile = {
+      id: "file-1",
+      filename: "report.pdf",
+      content_type: "application/pdf",
+      size_bytes: 42,
+      checksum_sha256: null,
+      object_key: "objects/file-1",
+      state: "complete",
+      created_at: "2026-07-02T12:00:00Z",
+      completed_at: "2026-07-02T12:01:00Z",
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, completedFile))
+      .mockResolvedValueOnce(jsonResponse(200, { files: [completedFile] }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          download_url: "https://storage.example/download",
+          expires_at: "2026-07-02T13:00:00Z",
+        }),
+      )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(api.completeUpload("secret-token", "file-1")).resolves.toEqual(
+      completedFile,
+    )
+    await expect(api.listFiles("secret-token")).resolves.toEqual({
+      files: [completedFile],
+    })
+    await expect(api.createDownload("secret-token", "file-1")).resolves.toEqual({
+      download_url: "https://storage.example/download",
+      expires_at: "2026-07-02T13:00:00Z",
+    })
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      `${API_BASE_URL}/files/file-1/complete`,
+      `${API_BASE_URL}/files`,
+      `${API_BASE_URL}/files/file-1/download`,
+    ])
+    expect(fetchMock.mock.calls[0][1].method).toBe("POST")
+    expect(fetchMock.mock.calls[1][1].headers.Authorization).toBe(
+      "Bearer secret-token",
+    )
+  })
+
   it("falls back to a generic error on non-JSON failures", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("boom", { status: 500 })))
 
     const error = await api.health().catch((caught: unknown) => caught)
     expect(error).toBeInstanceOf(ApiError)
     expect((error as ApiError).code).toBe("unknown_error")
+  })
+})
+
+type MockXhrEvent = {
+  lengthComputable?: boolean
+  loaded?: number
+  total?: number
+}
+
+class MockXMLHttpRequest {
+  static instances: MockXMLHttpRequest[] = []
+
+  status = 0
+  method = ""
+  url = ""
+  body: BodyInit | null = null
+  headers: Record<string, string> = {}
+  uploadListeners: Record<string, ((event: MockXhrEvent) => void)[]> = {}
+  listeners: Record<string, (() => void)[]> = {}
+
+  upload = {
+    addEventListener: (type: string, listener: (event: MockXhrEvent) => void) => {
+      this.uploadListeners[type] = [...(this.uploadListeners[type] ?? []), listener]
+    },
+  }
+
+  constructor() {
+    MockXMLHttpRequest.instances.push(this)
+  }
+
+  open(method: string, url: string) {
+    this.method = method
+    this.url = url
+  }
+
+  setRequestHeader(name: string, value: string) {
+    this.headers[name] = value
+  }
+
+  send(body: BodyInit) {
+    this.body = body
+  }
+
+  addEventListener(type: string, listener: () => void) {
+    this.listeners[type] = [...(this.listeners[type] ?? []), listener]
+  }
+
+  emitUploadProgress(event: Required<MockXhrEvent>) {
+    for (const listener of this.uploadListeners.progress ?? []) {
+      listener(event)
+    }
+  }
+
+  emit(type: string) {
+    for (const listener of this.listeners[type] ?? []) {
+      listener()
+    }
+  }
+}
+
+describe("direct upload helper", () => {
+  afterEach(() => {
+    MockXMLHttpRequest.instances = []
+  })
+
+  it("puts raw file bytes and reports computable progress", async () => {
+    vi.stubGlobal("XMLHttpRequest", MockXMLHttpRequest)
+    const file = new File(["hello"], "hello.txt", { type: "text/plain" })
+    const onProgress = vi.fn()
+
+    const upload = uploadFileDirect(
+      "https://storage.example/upload",
+      file,
+      onProgress,
+    )
+
+    const xhr = MockXMLHttpRequest.instances[0]
+    expect(xhr.method).toBe("PUT")
+    expect(xhr.url).toBe("https://storage.example/upload")
+    expect(xhr.headers["Content-Type"]).toBe("text/plain")
+    expect(xhr.body).toBe(file)
+
+    xhr.emitUploadProgress({ lengthComputable: true, loaded: 3, total: 5 })
+    xhr.status = 204
+    xhr.emit("load")
+
+    await expect(upload).resolves.toBeUndefined()
+    expect(onProgress).toHaveBeenCalledWith({ loaded: 3, total: 5, percent: 60 })
+  })
+
+  it("uses application/octet-stream when the file has no type", async () => {
+    vi.stubGlobal("XMLHttpRequest", MockXMLHttpRequest)
+    const file = new File(["hello"], "hello.bin")
+
+    const upload = uploadFileDirect("https://storage.example/upload", file)
+    const xhr = MockXMLHttpRequest.instances[0]
+
+    expect(xhr.headers["Content-Type"]).toBe("application/octet-stream")
+    xhr.status = 200
+    xhr.emit("load")
+    await expect(upload).resolves.toBeUndefined()
+  })
+
+  it("rejects non-2xx and non-3xx XHR statuses", async () => {
+    vi.stubGlobal("XMLHttpRequest", MockXMLHttpRequest)
+    const file = new File(["hello"], "hello.txt", { type: "text/plain" })
+
+    const upload = uploadFileDirect("https://storage.example/upload", file)
+    const xhr = MockXMLHttpRequest.instances[0]
+    xhr.status = 403
+    xhr.emit("load")
+
+    await expect(upload).rejects.toThrow("Direct upload failed with status 403")
+  })
+
+  it("ignores non-computable progress events", async () => {
+    vi.stubGlobal("XMLHttpRequest", MockXMLHttpRequest)
+    const file = new File(["hello"], "hello.txt", { type: "text/plain" })
+    const onProgress = vi.fn()
+
+    const upload = uploadFileDirect(
+      "https://storage.example/upload",
+      file,
+      onProgress,
+    )
+    const xhr = MockXMLHttpRequest.instances[0]
+    xhr.emitUploadProgress({ lengthComputable: false, loaded: 3, total: 5 })
+    xhr.status = 200
+    xhr.emit("load")
+
+    await expect(upload).resolves.toBeUndefined()
+    expect(onProgress).not.toHaveBeenCalled()
   })
 })

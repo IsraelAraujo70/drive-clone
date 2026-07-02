@@ -11,7 +11,7 @@ Initial deploy:
 - Source directory: `services/api`
 - Health endpoint: `/health`
 - Public URL: `https://api-production-bcad4.up.railway.app`
-- Verified deployment: `91e7da03-f664-4782-948f-b78ebee06659`
+- Verified deployment: `86164b07-f605-4724-9efb-32e3464baf9c`
 
 Frontend deploy:
 
@@ -20,7 +20,7 @@ Frontend deploy:
 - Source directory: `apps/web`
 - Health endpoint: `/`
 - Public URL: `https://web-production-c3311.up.railway.app`
-- Verified deployment: `2c3f6d98-18bf-4d69-8259-57e462aea352`
+- Verified deployment: `ef2f4843-f122-400b-92ff-ec0157329d67`
 
 Source configuration:
 
@@ -28,6 +28,8 @@ Source configuration:
 - Branch: `google-drive-clone-challenge`
 - API root directory: `/services/api`
 - Web root directory: `/apps/web`
+- API watch pattern: `services/api/**`
+- Web watch pattern: `apps/web/**`
 
 Smoke check:
 

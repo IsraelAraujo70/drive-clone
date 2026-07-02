@@ -255,8 +255,8 @@ Initial deployment status:
 - Web URL: `https://web-production-c3311.up.railway.app`.
 - API service source: `IsraelAraujo70/drive-clone`, branch `google-drive-clone-challenge`, root `/services/api`.
 - Web service source: `IsraelAraujo70/drive-clone`, branch `google-drive-clone-challenge`, root `/apps/web`.
-- Latest verified API deployment: `91e7da03-f664-4782-948f-b78ebee06659`.
-- Latest verified web deployment: `2c3f6d98-18bf-4d69-8259-57e462aea352`.
+- Latest verified API deployment: `86164b07-f605-4724-9efb-32e3464baf9c`.
+- Latest verified web deployment: `ef2f4843-f122-400b-92ff-ec0157329d67`.
 - Product resources for Postgres, buckets, and workers will be added as their implementation lands.
 
 ## Milestones

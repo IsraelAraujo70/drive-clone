@@ -32,6 +32,35 @@ Use a services-first architecture:
 
 The backend owns metadata, authorization, upload state, quota enforcement, and sync semantics. File bytes live in S3-compatible object storage. PostgreSQL stores durable metadata.
 
+## Repository Structure
+
+Current structure:
+
+```text
+apps/
+  web/
+contracts/
+docs/
+infra/
+  railway/
+services/
+  api/
+  worker/
+```
+
+Current deployable service:
+
+- `services/api`: minimal Rust API scaffold with `/` and `/health`.
+
+Run locally:
+
+```bash
+cd services/api
+cargo test
+PORT=8080 cargo run
+curl http://127.0.0.1:8080/health
+```
+
 ### Core Components
 
 Backend API:
@@ -219,6 +248,15 @@ Required deployment behavior:
 - Database migrations run through a controlled command.
 - Every release gets a smoke test: sign in, upload a small file, download it, delete it, restore it.
 
+Initial deployment status:
+
+- The first Railway deployment targets `services/api`.
+- The first health check target is `/health`.
+- Project: `drive-clone`.
+- API URL: `https://api-production-bcad4.up.railway.app`.
+- Latest verified deployment: `51137aad-427c-449f-b231-52f2d34681b7`.
+- Product services for web, Postgres, buckets, and workers will be added as their implementation lands.
+
 ## Milestones
 
 ### Milestone 1: MVP Web Drive
@@ -354,4 +392,10 @@ Track:
 
 ## Current Status
 
-This repository currently contains the challenge and proposed solution documentation. Application implementation comes next.
+This repository currently contains:
+
+- Challenge prompt.
+- Proposed solution documentation.
+- Folder structure for the planned services.
+- Minimal deployable Rust API scaffold.
+- Initial Railway deployment for the API service.

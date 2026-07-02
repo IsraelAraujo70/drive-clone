@@ -1,0 +1,4 @@
+target/
+.git/
+.railway/
+.DS_Store

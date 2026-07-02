@@ -32,6 +32,35 @@ Use a services-first architecture:
 
 The backend owns metadata, authorization, upload state, quota enforcement, and sync semantics. File bytes live in S3-compatible object storage. PostgreSQL stores durable metadata.
 
+## Repository Structure
+
+Current structure:
+
+```text
+apps/
+  web/
+contracts/
+docs/
+infra/
+  railway/
+services/
+  api/
+  worker/
+```
+
+Current deployable service:
+
+- `services/api`: minimal Rust API scaffold with `/` and `/health`.
+
+Run locally:
+
+```bash
+cd services/api
+cargo test
+PORT=8080 cargo run
+curl http://127.0.0.1:8080/health
+```
+
 ### Core Components
 
 Backend API:
@@ -219,6 +248,17 @@ Required deployment behavior:
 - Database migrations run through a controlled command.
 - Every release gets a smoke test: sign in, upload a small file, download it, delete it, restore it.
 
+Initial deployment status:
+
+- Project: `drive-clone`.
+- API URL: `https://api-production-bcad4.up.railway.app`.
+- Web URL: `https://web-production-c3311.up.railway.app`.
+- API service source: `IsraelAraujo70/drive-clone`, branch `google-drive-clone-challenge`, root `/services/api`.
+- Web service source: `IsraelAraujo70/drive-clone`, branch `google-drive-clone-challenge`, root `/apps/web`.
+- Latest verified API deployment: `86164b07-f605-4724-9efb-32e3464baf9c`.
+- Latest verified web deployment: `ef2f4843-f122-400b-92ff-ec0157329d67`.
+- Product resources for Postgres, buckets, and workers will be added as their implementation lands.
+
 ## Milestones
 
 ### Milestone 1: MVP Web Drive
@@ -352,6 +392,47 @@ Track:
 9. Search for the file.
 10. Show deployment health and test results.
 
+## Local Development
+
+Requirements: Rust, Node 20+, Docker.
+
+```bash
+# 1. Start Postgres (host port 5433 to avoid clashing with a local install)
+docker compose up -d
+
+# 2. Run the API (migrations run automatically on boot)
+cd services/api
+DATABASE_URL=postgres://postgres:postgres@localhost:5433/drive_clone cargo run
+
+# 3. Run the web app (in another terminal)
+cd apps/web
+npm install
+npm run dev   # http://localhost:5173, talks to http://localhost:8080 by default
+```
+
+Environment examples live in `services/api/.env.example` and `apps/web/.env.example`.
+
+### Tests
+
+```bash
+# API: unit + integration tests (integration tests need the compose Postgres up)
+cd services/api
+DATABASE_URL=postgres://postgres:postgres@localhost:5433/drive_clone cargo test
+
+# Web: vitest
+cd apps/web
+npm test
+```
+
 ## Current Status
 
-This repository currently contains the challenge and proposed solution documentation. Application implementation comes next.
+Implemented so far:
+
+- Landing page, signup, and login (English UI) with a protected `/drive` shell.
+- Rust API on Axum + SQLx + PostgreSQL: `POST /auth/signup`, `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, and a DB-aware `GET /health`.
+- Argon2 password hashing; opaque bearer session tokens stored hashed (SHA-256) with 30-day expiry.
+- Auth contract in `contracts/auth.md`; migrations in `services/api/migrations`.
+- Gate tests: 14 API tests (validation, token, and full HTTP auth flows against real Postgres) and 11 web tests.
+- Repo-connected Railway deployments for the API and web services.
+
+Next milestone: file upload, folder browsing, and download (Milestone 1 continues).

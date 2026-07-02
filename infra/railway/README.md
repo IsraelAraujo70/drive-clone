@@ -11,12 +11,29 @@ Initial deploy:
 - Source directory: `services/api`
 - Health endpoint: `/health`
 - Public URL: `https://api-production-bcad4.up.railway.app`
-- Verified deployment: `51137aad-427c-449f-b231-52f2d34681b7`
+- Verified deployment: `91e7da03-f664-4782-948f-b78ebee06659`
+
+Frontend deploy:
+
+- Service: `web`
+- Service ID: `70b2c191-e986-49bf-b8aa-f21681812a6f`
+- Source directory: `apps/web`
+- Health endpoint: `/`
+- Public URL: `https://web-production-c3311.up.railway.app`
+- Verified deployment: `2c3f6d98-18bf-4d69-8259-57e462aea352`
+
+Source configuration:
+
+- Repo: `IsraelAraujo70/drive-clone`
+- Branch: `google-drive-clone-challenge`
+- API root directory: `/services/api`
+- Web root directory: `/apps/web`
 
 Smoke check:
 
 ```bash
 curl https://api-production-bcad4.up.railway.app/health
+curl -I https://web-production-c3311.up.railway.app/
 ```
 
 Future resources:

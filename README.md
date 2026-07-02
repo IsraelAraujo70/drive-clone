@@ -250,12 +250,14 @@ Required deployment behavior:
 
 Initial deployment status:
 
-- The first Railway deployment targets `services/api`.
-- The first health check target is `/health`.
 - Project: `drive-clone`.
 - API URL: `https://api-production-bcad4.up.railway.app`.
-- Latest verified deployment: `51137aad-427c-449f-b231-52f2d34681b7`.
-- Product services for web, Postgres, buckets, and workers will be added as their implementation lands.
+- Web URL: `https://web-production-c3311.up.railway.app`.
+- API service source: `IsraelAraujo70/drive-clone`, branch `google-drive-clone-challenge`, root `/services/api`.
+- Web service source: `IsraelAraujo70/drive-clone`, branch `google-drive-clone-challenge`, root `/apps/web`.
+- Latest verified API deployment: `91e7da03-f664-4782-948f-b78ebee06659`.
+- Latest verified web deployment: `2c3f6d98-18bf-4d69-8259-57e462aea352`.
+- Product resources for Postgres, buckets, and workers will be added as their implementation lands.
 
 ## Milestones
 
@@ -398,4 +400,5 @@ This repository currently contains:
 - Proposed solution documentation.
 - Folder structure for the planned services.
 - Minimal deployable Rust API scaffold.
-- Initial Railway deployment for the API service.
+- Vite React TypeScript frontend scaffold.
+- Repo-connected Railway deployments for the API and web services.

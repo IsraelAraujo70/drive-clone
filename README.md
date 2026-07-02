@@ -392,13 +392,47 @@ Track:
 9. Search for the file.
 10. Show deployment health and test results.
 
+## Local Development
+
+Requirements: Rust, Node 20+, Docker.
+
+```bash
+# 1. Start Postgres (host port 5433 to avoid clashing with a local install)
+docker compose up -d
+
+# 2. Run the API (migrations run automatically on boot)
+cd services/api
+DATABASE_URL=postgres://postgres:postgres@localhost:5433/drive_clone cargo run
+
+# 3. Run the web app (in another terminal)
+cd apps/web
+npm install
+npm run dev   # http://localhost:5173, talks to http://localhost:8080 by default
+```
+
+Environment examples live in `services/api/.env.example` and `apps/web/.env.example`.
+
+### Tests
+
+```bash
+# API: unit + integration tests (integration tests need the compose Postgres up)
+cd services/api
+DATABASE_URL=postgres://postgres:postgres@localhost:5433/drive_clone cargo test
+
+# Web: vitest
+cd apps/web
+npm test
+```
+
 ## Current Status
 
-This repository currently contains:
+Implemented so far:
 
-- Challenge prompt.
-- Proposed solution documentation.
-- Folder structure for the planned services.
-- Minimal deployable Rust API scaffold.
-- Vite React TypeScript frontend scaffold.
+- Landing page, signup, and login (English UI) with a protected `/drive` shell.
+- Rust API on Axum + SQLx + PostgreSQL: `POST /auth/signup`, `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, and a DB-aware `GET /health`.
+- Argon2 password hashing; opaque bearer session tokens stored hashed (SHA-256) with 30-day expiry.
+- Auth contract in `contracts/auth.md`; migrations in `services/api/migrations`.
+- Gate tests: 14 API tests (validation, token, and full HTTP auth flows against real Postgres) and 11 web tests.
 - Repo-connected Railway deployments for the API and web services.
+
+Next milestone: file upload, folder browsing, and download (Milestone 1 continues).

@@ -34,7 +34,7 @@ export function AppSidebar() {
 
   return (
     <Sidebar collapsible="icon">
-      <SidebarHeader className="p-3">
+      <SidebarHeader className="p-3 group-data-[collapsible=icon]:p-2">
         <Brand className="group-data-[collapsible=icon]:justify-center" />
       </SidebarHeader>
 

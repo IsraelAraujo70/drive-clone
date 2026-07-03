@@ -1,4 +1,75 @@
 services:
+  api:
+    build:
+      context: ./services/api
+      target: dev
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8080
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/drive_clone
+      CORS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_PUBLIC_ENDPOINT_URL: http://localhost:9000
+      S3_BUCKET: drive-clone
+      S3_REGION: us-east-1
+      S3_URL_STYLE: path
+      S3_ACCESS_KEY_ID: minioadmin
+      S3_SECRET_ACCESS_KEY: minioadmin
+      MAX_FILE_SIZE_BYTES: 16106127360
+      PRESIGNED_URL_TTL_SECONDS: 900
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_started
+      minio-create-bucket:
+        condition: service_completed_successfully
+    volumes:
+      - api_target:/app/target
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./services/api/src
+          target: /app/src
+          initial_sync: true
+        - action: sync+restart
+          path: ./services/api/migrations
+          target: /app/migrations
+          initial_sync: true
+        - action: sync+restart
+          path: ./services/api/build.rs
+          target: /app/build.rs
+          initial_sync: true
+        - action: rebuild
+          path: ./services/api/Cargo.toml
+        - action: rebuild
+          path: ./services/api/Cargo.lock
+
+  web:
+    build:
+      context: ./apps/web
+      target: dev
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8080
+      NEXT_TELEMETRY_DISABLED: 1
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    develop:
+      watch:
+        - action: sync
+          path: ./apps/web
+          target: /app
+          initial_sync: true
+          ignore:
+            - node_modules/
+            - .next/
+        - action: rebuild
+          path: ./apps/web/package.json
+        - action: rebuild
+          path: ./apps/web/package-lock.json
+
   postgres:
     image: postgres:16
     environment:
@@ -35,5 +106,6 @@ services:
       "
 
 volumes:
+  api_target:
   postgres_data:
   minio_data:

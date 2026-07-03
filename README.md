@@ -394,11 +394,44 @@ Track:
 
 ## Local Development
 
-Requirements: Rust, Node 20+, Docker.
+Requirements: Docker with Compose Watch support. Rust and Node are only required
+when running services directly on the host.
 
 ```bash
-# 1. Start Postgres and MinIO
-docker compose up -d
+# Full stack with file watching:
+make dev
+
+# Full stack in the background:
+make up
+
+# URLs:
+# Web: http://localhost:3000
+# API: http://localhost:8080/health
+# MinIO console: http://localhost:9001
+```
+
+`make dev` runs `docker compose up --watch --build`. The web container syncs
+source files into the Next.js dev server for hot reload. The API container syncs
+Rust source and migration files, then restarts `cargo run` so code changes
+recompile inside the container. Dependency manifest changes rebuild the affected
+image.
+
+Useful commands:
+
+```bash
+make logs
+make ps
+make down
+make test
+make eval-upload
+make clean
+```
+
+Direct host-run commands still work when needed:
+
+```bash
+# 1. Start only the dependencies
+docker compose up -d postgres minio minio-create-bucket
 
 # 2. Run the API (migrations run automatically on boot)
 cd services/api
@@ -416,7 +449,7 @@ cargo run
 # 3. Run the web app (in another terminal)
 cd apps/web
 npm install
-npm run dev   # http://localhost:3000, talks to http://localhost:8080 by default
+npm run dev
 ```
 
 Environment examples live in `services/api/.env.example` and `apps/web/.env.example`.

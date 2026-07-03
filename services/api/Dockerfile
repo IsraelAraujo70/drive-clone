@@ -4,7 +4,22 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY migrations ./migrations
+COPY build.rs ./
 RUN cargo build --release
+
+FROM rust:1.95-slim AS dev
+
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY migrations ./migrations
+COPY build.rs ./
+RUN cargo fetch
+
+ENV HOST=0.0.0.0
+ENV PORT=8080
+
+CMD ["cargo", "run"]
 
 FROM debian:bookworm-slim
 

@@ -6,8 +6,6 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use url::Url;
 
 use crate::auth::ApiError;
@@ -50,6 +48,13 @@ pub struct S3Storage {
     region: String,
     access_key_id: String,
     secret_access_key: String,
+    url_style: S3UrlStyle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum S3UrlStyle {
+    Path,
+    VirtualHost,
 }
 
 impl S3Storage {
@@ -69,16 +74,30 @@ impl S3Storage {
             region: required_env("S3_REGION")?,
             access_key_id: required_env("S3_ACCESS_KEY_ID")?,
             secret_access_key: required_env("S3_SECRET_ACCESS_KEY")?,
+            url_style: S3UrlStyle::from_env()?,
         })
     }
 
     fn object_url(&self, base: &Url, object_key: &str) -> Result<Url, ApiError> {
         let mut url = base.clone();
-        url.path_segments_mut()
-            .map_err(|_| ApiError::StorageError)?
-            .clear()
-            .push(&self.bucket)
-            .extend(object_key.split('/'));
+        match self.url_style {
+            S3UrlStyle::Path => {
+                url.path_segments_mut()
+                    .map_err(|_| ApiError::StorageError)?
+                    .clear()
+                    .push(&self.bucket)
+                    .extend(object_key.split('/'));
+            }
+            S3UrlStyle::VirtualHost => {
+                let host = url.host_str().ok_or(ApiError::StorageError)?;
+                url.set_host(Some(&format!("{}.{}", self.bucket, host)))
+                    .map_err(|_| ApiError::StorageError)?;
+                url.path_segments_mut()
+                    .map_err(|_| ApiError::StorageError)?
+                    .clear()
+                    .extend(object_key.split('/'));
+            }
+        }
         Ok(url)
     }
 
@@ -165,36 +184,34 @@ impl ObjectStorage for S3Storage {
         let url = self
             .presign_with_base("HEAD", &self.endpoint_url, object_key, 60)?
             .url;
-        let url = Url::parse(&url).map_err(|_| ApiError::StorageError)?;
-        if url.scheme() != "http" {
+        let response = reqwest::Client::new()
+            .head(url)
+            .send()
+            .await
+            .map_err(|_| ApiError::StorageError)?;
+        if !response.status().is_success() {
             return Err(ApiError::StorageError);
         }
-        let host = url.host_str().ok_or(ApiError::StorageError)?;
-        let port = url.port().unwrap_or(80);
-        let authority = match url.port() {
-            Some(port) => format!("{host}:{port}"),
-            None => host.to_string(),
-        };
-        let path = match url.query() {
-            Some(query) => format!("{}?{query}", url.path()),
-            None => url.path().to_string(),
-        };
+        let content_length = response
+            .headers()
+            .get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<i64>().ok())
+            .ok_or(ApiError::StorageError)?;
+        Ok(ObjectMetadata { content_length })
+    }
+}
 
-        let mut stream = TcpStream::connect((host, port))
-            .await
-            .map_err(|_| ApiError::StorageError)?;
-        let request =
-            format!("HEAD {path} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n");
-        stream
-            .write_all(request.as_bytes())
-            .await
-            .map_err(|_| ApiError::StorageError)?;
-        let mut response = Vec::new();
-        stream
-            .read_to_end(&mut response)
-            .await
-            .map_err(|_| ApiError::StorageError)?;
-        parse_head_response(&response)
+impl S3UrlStyle {
+    fn from_env() -> Result<Self, ApiError> {
+        match env::var("S3_URL_STYLE")
+            .unwrap_or_else(|_| "path".to_string())
+            .as_str()
+        {
+            "path" => Ok(Self::Path),
+            "virtual-host" => Ok(Self::VirtualHost),
+            _ => Err(ApiError::StorageError),
+        }
     }
 }
 
@@ -370,4 +387,56 @@ fn parse_head_response(response: &[u8]) -> Result<ObjectMetadata, ApiError> {
     }
 
     Err(ApiError::StorageError)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn storage(url_style: S3UrlStyle) -> S3Storage {
+        S3Storage {
+            endpoint_url: Url::parse("https://storage.example").unwrap(),
+            public_endpoint_url: Url::parse("https://public-storage.example").unwrap(),
+            bucket: "bucket-name".to_string(),
+            region: "auto".to_string(),
+            access_key_id: "access".to_string(),
+            secret_access_key: "secret".to_string(),
+            url_style,
+        }
+    }
+
+    #[test]
+    fn path_style_urls_include_bucket_in_path() {
+        let url = storage(S3UrlStyle::Path)
+            .object_url(
+                &Url::parse("https://storage.example").unwrap(),
+                "user-id/object-id",
+            )
+            .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://storage.example/bucket-name/user-id/object-id"
+        );
+    }
+
+    #[test]
+    fn virtual_host_urls_include_bucket_in_host() {
+        let url = storage(S3UrlStyle::VirtualHost)
+            .object_url(
+                &Url::parse("https://storage.example").unwrap(),
+                "user-id/object-id",
+            )
+            .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://bucket-name.storage.example/user-id/object-id"
+        );
+    }
+
+    #[test]
+    fn parse_head_response_reads_content_length() {
+        let metadata =
+            parse_head_response(b"HTTP/1.1 200 OK\r\ncontent-length: 42\r\n\r\n").unwrap();
+        assert_eq!(metadata.content_length, 42);
+    }
 }

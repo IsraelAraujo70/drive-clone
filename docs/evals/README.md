@@ -12,6 +12,7 @@ S3_ENDPOINT_URL=http://localhost:9000 \
 S3_PUBLIC_ENDPOINT_URL=http://localhost:9000 \
 S3_BUCKET=drive-clone \
 S3_REGION=us-east-1 \
+S3_URL_STYLE=path \
 S3_ACCESS_KEY_ID=minioadmin \
 S3_SECRET_ACCESS_KEY=minioadmin \
 CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000 \

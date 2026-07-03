@@ -1,47 +1,16 @@
-use std::collections::HashMap;
 use std::env;
-use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use url::Url;
 
-use crate::auth::ApiError;
+use crate::application::ports::StorageError;
+use crate::application::ports::object_storage::{ObjectMetadata, ObjectStorage, PresignedUrl};
 
 #[derive(Debug, Clone)]
-pub struct PresignedUrl {
-    pub url: String,
-    pub expires_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ObjectMetadata {
-    pub content_length: i64,
-}
-
-#[async_trait]
-pub trait ObjectStorage: Send + Sync {
-    async fn presign_put(
-        &self,
-        object_key: &str,
-        content_type: &str,
-        size_bytes: i64,
-        ttl_seconds: i64,
-    ) -> Result<PresignedUrl, ApiError>;
-
-    async fn presign_get(
-        &self,
-        object_key: &str,
-        ttl_seconds: i64,
-    ) -> Result<PresignedUrl, ApiError>;
-
-    async fn head_object(&self, object_key: &str) -> Result<ObjectMetadata, ApiError>;
-}
-
-#[derive(Debug, Clone)]
-pub struct S3Storage {
+pub struct S3ObjectStorage {
     endpoint_url: Url,
     public_endpoint_url: Url,
     bucket: String,
@@ -57,13 +26,13 @@ enum S3UrlStyle {
     VirtualHost,
 }
 
-impl S3Storage {
-    pub fn from_env() -> Result<Self, ApiError> {
+impl S3ObjectStorage {
+    pub fn from_env() -> Result<Self, StorageError> {
         let endpoint_url =
-            Url::parse(&required_env("S3_ENDPOINT_URL")?).map_err(|_| ApiError::StorageError)?;
+            Url::parse(&required_env("S3_ENDPOINT_URL")?).map_err(|_| StorageError::Unexpected)?;
         let public_endpoint_url = env::var("S3_PUBLIC_ENDPOINT_URL")
             .ok()
-            .map(|value| Url::parse(&value).map_err(|_| ApiError::StorageError))
+            .map(|value| Url::parse(&value).map_err(|_| StorageError::Unexpected))
             .transpose()?
             .unwrap_or_else(|| endpoint_url.clone());
 
@@ -78,22 +47,22 @@ impl S3Storage {
         })
     }
 
-    fn object_url(&self, base: &Url, object_key: &str) -> Result<Url, ApiError> {
+    fn object_url(&self, base: &Url, object_key: &str) -> Result<Url, StorageError> {
         let mut url = base.clone();
         match self.url_style {
             S3UrlStyle::Path => {
                 url.path_segments_mut()
-                    .map_err(|_| ApiError::StorageError)?
+                    .map_err(|_| StorageError::Unexpected)?
                     .clear()
                     .push(&self.bucket)
                     .extend(object_key.split('/'));
             }
             S3UrlStyle::VirtualHost => {
-                let host = url.host_str().ok_or(ApiError::StorageError)?;
+                let host = url.host_str().ok_or(StorageError::Unexpected)?;
                 url.set_host(Some(&format!("{}.{}", self.bucket, host)))
-                    .map_err(|_| ApiError::StorageError)?;
+                    .map_err(|_| StorageError::Unexpected)?;
                 url.path_segments_mut()
-                    .map_err(|_| ApiError::StorageError)?
+                    .map_err(|_| StorageError::Unexpected)?
                     .clear()
                     .extend(object_key.split('/'));
             }
@@ -106,7 +75,7 @@ impl S3Storage {
         method: &str,
         object_key: &str,
         ttl_seconds: i64,
-    ) -> Result<PresignedUrl, ApiError> {
+    ) -> Result<PresignedUrl, StorageError> {
         self.presign_with_base(method, &self.public_endpoint_url, object_key, ttl_seconds)
     }
 
@@ -116,7 +85,7 @@ impl S3Storage {
         base_url: &Url,
         object_key: &str,
         ttl_seconds: i64,
-    ) -> Result<PresignedUrl, ApiError> {
+    ) -> Result<PresignedUrl, StorageError> {
         let now = Utc::now();
         let expires_at = now + Duration::seconds(ttl_seconds);
         let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
@@ -124,7 +93,7 @@ impl S3Storage {
         let credential_scope = format!("{date}/{}/s3/aws4_request", self.region);
         let credential = format!("{}/{}", self.access_key_id, credential_scope);
         let mut url = self.object_url(base_url, object_key)?;
-        let host = url.host_str().ok_or(ApiError::StorageError)?.to_string();
+        let host = url.host_str().ok_or(StorageError::Unexpected)?.to_string();
         let host = match url.port() {
             Some(port) => format!("{host}:{port}"),
             None => host,
@@ -161,14 +130,14 @@ impl S3Storage {
 }
 
 #[async_trait]
-impl ObjectStorage for S3Storage {
+impl ObjectStorage for S3ObjectStorage {
     async fn presign_put(
         &self,
         object_key: &str,
         _content_type: &str,
         _size_bytes: i64,
         ttl_seconds: i64,
-    ) -> Result<PresignedUrl, ApiError> {
+    ) -> Result<PresignedUrl, StorageError> {
         self.presign("PUT", object_key, ttl_seconds)
     }
 
@@ -176,11 +145,11 @@ impl ObjectStorage for S3Storage {
         &self,
         object_key: &str,
         ttl_seconds: i64,
-    ) -> Result<PresignedUrl, ApiError> {
+    ) -> Result<PresignedUrl, StorageError> {
         self.presign("GET", object_key, ttl_seconds)
     }
 
-    async fn head_object(&self, object_key: &str) -> Result<ObjectMetadata, ApiError> {
+    async fn head_object(&self, object_key: &str) -> Result<ObjectMetadata, StorageError> {
         let url = self
             .presign_with_base("HEAD", &self.endpoint_url, object_key, 60)?
             .url;
@@ -188,124 +157,35 @@ impl ObjectStorage for S3Storage {
             .head(url)
             .send()
             .await
-            .map_err(|_| ApiError::StorageError)?;
+            .map_err(|_| StorageError::Unexpected)?;
         if !response.status().is_success() {
-            return Err(ApiError::StorageError);
+            return Err(StorageError::Unexpected);
         }
         let content_length = response
             .headers()
             .get(reqwest::header::CONTENT_LENGTH)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.parse::<i64>().ok())
-            .ok_or(ApiError::StorageError)?;
+            .ok_or(StorageError::Unexpected)?;
         Ok(ObjectMetadata { content_length })
     }
 }
 
 impl S3UrlStyle {
-    fn from_env() -> Result<Self, ApiError> {
+    fn from_env() -> Result<Self, StorageError> {
         match env::var("S3_URL_STYLE")
             .unwrap_or_else(|_| "path".to_string())
             .as_str()
         {
             "path" => Ok(Self::Path),
             "virtual-host" => Ok(Self::VirtualHost),
-            _ => Err(ApiError::StorageError),
+            _ => Err(StorageError::Unexpected),
         }
     }
 }
 
-#[derive(Debug, Default)]
-pub struct DisabledStorage;
-
-#[async_trait]
-impl ObjectStorage for DisabledStorage {
-    async fn presign_put(
-        &self,
-        _object_key: &str,
-        _content_type: &str,
-        _size_bytes: i64,
-        _ttl_seconds: i64,
-    ) -> Result<PresignedUrl, ApiError> {
-        Err(ApiError::StorageError)
-    }
-
-    async fn presign_get(
-        &self,
-        _object_key: &str,
-        _ttl_seconds: i64,
-    ) -> Result<PresignedUrl, ApiError> {
-        Err(ApiError::StorageError)
-    }
-
-    async fn head_object(&self, _object_key: &str) -> Result<ObjectMetadata, ApiError> {
-        Err(ApiError::StorageError)
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct FakeStorage {
-    objects: Arc<Mutex<HashMap<String, ObjectMetadata>>>,
-}
-
-impl FakeStorage {
-    pub fn put_object(&self, object_key: &str, content_length: i64) {
-        self.objects
-            .lock()
-            .expect("fake storage mutex poisoned")
-            .insert(object_key.to_string(), ObjectMetadata { content_length });
-    }
-}
-
-#[async_trait]
-impl ObjectStorage for FakeStorage {
-    async fn presign_put(
-        &self,
-        object_key: &str,
-        _content_type: &str,
-        _size_bytes: i64,
-        ttl_seconds: i64,
-    ) -> Result<PresignedUrl, ApiError> {
-        presigned_fake_url("PUT", object_key, ttl_seconds)
-    }
-
-    async fn presign_get(
-        &self,
-        object_key: &str,
-        ttl_seconds: i64,
-    ) -> Result<PresignedUrl, ApiError> {
-        presigned_fake_url("GET", object_key, ttl_seconds)
-    }
-
-    async fn head_object(&self, object_key: &str) -> Result<ObjectMetadata, ApiError> {
-        self.objects
-            .lock()
-            .expect("fake storage mutex poisoned")
-            .get(object_key)
-            .cloned()
-            .ok_or(ApiError::StorageError)
-    }
-}
-
-fn presigned_fake_url(
-    method: &str,
-    object_key: &str,
-    ttl_seconds: i64,
-) -> Result<PresignedUrl, ApiError> {
-    let expires_at = Utc::now() + Duration::seconds(ttl_seconds);
-    let mut url = Url::parse("http://storage.test/").map_err(|_| ApiError::StorageError)?;
-    url.path_segments_mut()
-        .map_err(|_| ApiError::StorageError)?
-        .extend(object_key.split('/'));
-    url.query_pairs_mut().append_pair("method", method);
-    Ok(PresignedUrl {
-        url: url.to_string(),
-        expires_at,
-    })
-}
-
-fn required_env(name: &str) -> Result<String, ApiError> {
-    env::var(name).map_err(|_| ApiError::StorageError)
+fn required_env(name: &str) -> Result<String, StorageError> {
+    env::var(name).map_err(|_| StorageError::Unexpected)
 }
 
 fn canonical_uri(url: &Url) -> String {
@@ -353,25 +233,26 @@ fn percent_encode_query(value: &str) -> String {
         .collect()
 }
 
-fn signing_key(secret: &str, date: &str, region: &str) -> Result<Vec<u8>, ApiError> {
+fn signing_key(secret: &str, date: &str, region: &str) -> Result<Vec<u8>, StorageError> {
     let date_key = hmac_sha256(format!("AWS4{secret}").as_bytes(), date.as_bytes())?;
     let region_key = hmac_sha256(&date_key, region.as_bytes())?;
     let service_key = hmac_sha256(&region_key, b"s3")?;
     hmac_sha256(&service_key, b"aws4_request")
 }
 
-fn hmac_sha256(key: &[u8], bytes: &[u8]) -> Result<Vec<u8>, ApiError> {
-    let mut mac = Hmac::<Sha256>::new_from_slice(key).map_err(|_| ApiError::StorageError)?;
+fn hmac_sha256(key: &[u8], bytes: &[u8]) -> Result<Vec<u8>, StorageError> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).map_err(|_| StorageError::Unexpected)?;
     mac.update(bytes);
     Ok(mac.finalize().into_bytes().to_vec())
 }
 
-fn parse_head_response(response: &[u8]) -> Result<ObjectMetadata, ApiError> {
+#[cfg(test)]
+fn parse_head_response(response: &[u8]) -> Result<ObjectMetadata, StorageError> {
     let text = String::from_utf8_lossy(response);
     let mut lines = text.lines();
-    let status = lines.next().ok_or(ApiError::StorageError)?;
+    let status = lines.next().ok_or(StorageError::Unexpected)?;
     if !status.contains(" 200 ") {
-        return Err(ApiError::StorageError);
+        return Err(StorageError::Unexpected);
     }
 
     for line in lines {
@@ -380,21 +261,21 @@ fn parse_head_response(response: &[u8]) -> Result<ObjectMetadata, ApiError> {
                 let content_length = value
                     .trim()
                     .parse::<i64>()
-                    .map_err(|_| ApiError::StorageError)?;
+                    .map_err(|_| StorageError::Unexpected)?;
                 return Ok(ObjectMetadata { content_length });
             }
         }
     }
 
-    Err(ApiError::StorageError)
+    Err(StorageError::Unexpected)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn storage(url_style: S3UrlStyle) -> S3Storage {
-        S3Storage {
+    fn storage(url_style: S3UrlStyle) -> S3ObjectStorage {
+        S3ObjectStorage {
             endpoint_url: Url::parse("https://storage.example").unwrap(),
             public_endpoint_url: Url::parse("https://public-storage.example").unwrap(),
             bucket: "bucket-name".to_string(),

@@ -9,6 +9,23 @@ Current scope:
 - Authenticate users.
 - Create direct-upload sessions, verify completed objects, list completed files, and return authorized download URLs.
 
+## Module Architecture
+
+The API uses a ports-and-adapters layout:
+
+- `src/domain`: core entities, value validation, and business rules. This layer does not import Axum, SQLx, Reqwest, environment configuration, or object-storage clients.
+- `src/application`: use cases and ports. Use cases coordinate domain rules through traits such as `AuthRepository`, `FileRepository`, `ObjectStorage`, `Clock`, and `IdGenerator`.
+- `src/adapters`: concrete implementations for the application ports. This includes Axum HTTP handlers, PostgreSQL repositories, S3-compatible object storage, disabled storage, and fake storage for tests.
+- `src/bootstrap`: dependency injection and runtime wiring. It reads configuration, connects PostgreSQL, runs migrations, builds adapters/use cases, configures CORS/tracing, and starts the Axum server.
+
+Dependency direction is one way:
+
+```text
+bootstrap -> adapters -> application -> domain
+```
+
+HTTP handlers call use cases only. Use cases do not know about HTTP, SQL, S3, or process environment variables.
+
 Local commands:
 
 ```bash

@@ -8,4 +8,5 @@ pub enum DomainError {
     FileTooLarge,
     FileNotFound,
     InvalidFileState,
+    UserNotFound,
 }

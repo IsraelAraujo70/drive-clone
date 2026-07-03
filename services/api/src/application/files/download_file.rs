@@ -42,7 +42,7 @@ impl DownloadFileUseCase {
     ) -> Result<DownloadFileOutput, AppError> {
         let file = self
             .file_repository
-            .find_completed_owned_file(user.id, file_id)
+            .find_downloadable_file(user.id, file_id)
             .await?
             .ok_or(DomainError::FileNotFound)?;
 

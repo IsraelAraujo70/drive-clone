@@ -52,6 +52,11 @@ impl IntoResponse for HttpError {
                 "file_not_found",
                 "File was not found",
             ),
+            AppError::Domain(DomainError::UserNotFound) => (
+                StatusCode::NOT_FOUND,
+                "user_not_found",
+                "User was not found",
+            ),
             AppError::Domain(DomainError::InvalidFileState) => (
                 StatusCode::CONFLICT,
                 "invalid_file_state",

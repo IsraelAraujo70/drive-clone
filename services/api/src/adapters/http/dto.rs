@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::application::auth::signup::AuthResponse as UseCaseAuthResponse;
-use crate::application::files::{CreateUploadOutput, DownloadFileOutput};
+use crate::application::files::{CreateUploadOutput, DownloadFileOutput, ShareFileInput};
 use crate::domain::auth::User;
-use crate::domain::files::{DriveFile, UploadRequest};
+use crate::domain::files::{DriveFile, FileShare, FileUser, SharedFile, UploadRequest};
 
 #[derive(Deserialize)]
 pub struct SignupRequest {
@@ -84,6 +84,7 @@ pub struct FileResponse {
     state: String,
     created_at: DateTime<Utc>,
     completed_at: Option<DateTime<Utc>>,
+    deleted_at: Option<DateTime<Utc>>,
 }
 
 impl From<DriveFile> for FileResponse {
@@ -98,6 +99,7 @@ impl From<DriveFile> for FileResponse {
             state: file.state.as_str().to_string(),
             created_at: file.created_at,
             completed_at: file.completed_at,
+            deleted_at: file.deleted_at,
         }
     }
 }
@@ -126,6 +128,96 @@ impl From<DownloadFileOutput> for DownloadResponse {
         Self {
             download_url: output.download_url,
             expires_at: output.expires_at,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ShareFileRequest {
+    email: String,
+}
+
+impl ShareFileRequest {
+    pub fn into_input(self, file_id: Uuid) -> ShareFileInput {
+        ShareFileInput {
+            file_id,
+            email: self.email,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct FileUserResponse {
+    id: Uuid,
+    email: String,
+    display_name: String,
+}
+
+impl From<FileUser> for FileUserResponse {
+    fn from(user: FileUser) -> Self {
+        Self {
+            id: user.id,
+            email: user.email,
+            display_name: user.display_name,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct FileShareResponse {
+    file_id: Uuid,
+    grantee: FileUserResponse,
+    created_at: DateTime<Utc>,
+}
+
+impl From<FileShare> for FileShareResponse {
+    fn from(share: FileShare) -> Self {
+        Self {
+            file_id: share.file_id,
+            grantee: share.grantee.into(),
+            created_at: share.created_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ListSharesResponse {
+    shares: Vec<FileShareResponse>,
+}
+
+impl From<Vec<FileShare>> for ListSharesResponse {
+    fn from(shares: Vec<FileShare>) -> Self {
+        Self {
+            shares: shares.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct SharedFileResponse {
+    #[serde(flatten)]
+    file: FileResponse,
+    owner: FileUserResponse,
+}
+
+impl From<SharedFile> for SharedFileResponse {
+    fn from(shared: SharedFile) -> Self {
+        Self {
+            file: shared.file.into(),
+            owner: shared.owner.into(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ListSharedWithMeResponse {
+    files: Vec<SharedFileResponse>,
+}
+
+impl From<Vec<SharedFile>> for ListSharedWithMeResponse {
+    fn from(files: Vec<SharedFile>) -> Self {
+        Self {
+            files: files.into_iter().map(Into::into).collect(),
         }
     }
 }

@@ -119,6 +119,7 @@ describe("api client", () => {
       state: "complete",
       created_at: "2026-07-02T12:00:00Z",
       completed_at: "2026-07-02T12:01:00Z",
+      deleted_at: null,
     }
     const fetchMock = vi
       .fn()
@@ -152,6 +153,143 @@ describe("api client", () => {
     expect(fetchMock.mock.calls[1][1].headers.Authorization).toBe(
       "Bearer secret-token",
     )
+  })
+
+  it("soft deletes, restores, and lists trash files", async () => {
+    const trashFile = {
+      id: "file-1",
+      filename: "report.pdf",
+      content_type: "application/pdf",
+      size_bytes: 42,
+      checksum_sha256: null,
+      object_key: "objects/file-1",
+      state: "complete",
+      created_at: "2026-07-02T12:00:00Z",
+      completed_at: "2026-07-02T12:01:00Z",
+      deleted_at: "2026-07-03T12:00:00Z",
+    }
+    const restoredFile = { ...trashFile, deleted_at: null }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(jsonResponse(200, restoredFile))
+      .mockResolvedValueOnce(jsonResponse(200, { files: [trashFile] }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(api.deleteFile("secret-token", "file-1")).resolves.toBeUndefined()
+    await expect(api.restoreFile("secret-token", "file-1")).resolves.toEqual(
+      restoredFile,
+    )
+    await expect(api.listTrash("secret-token")).resolves.toEqual({
+      files: [trashFile],
+    })
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      `${API_BASE_URL}/files/file-1`,
+      `${API_BASE_URL}/files/file-1/restore`,
+      `${API_BASE_URL}/files/trash`,
+    ])
+    expect(fetchMock.mock.calls[0][1].method).toBe("DELETE")
+    expect(fetchMock.mock.calls[1][1].method).toBe("POST")
+    expect(fetchMock.mock.calls[2][1].headers.Authorization).toBe(
+      "Bearer secret-token",
+    )
+  })
+
+  it("creates, lists, and revokes file shares", async () => {
+    const share = {
+      file_id: "file-1",
+      grantee: {
+        id: "user-2",
+        email: "friend@example.com",
+        display_name: "Friend",
+      },
+      created_at: "2026-07-03T12:00:00Z",
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(201, share))
+      .mockResolvedValueOnce(jsonResponse(200, { shares: [share] }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      api.shareFile("secret-token", "file-1", "friend@example.com"),
+    ).resolves.toEqual(share)
+    await expect(api.listShares("secret-token", "file-1")).resolves.toEqual({
+      shares: [share],
+    })
+    await expect(
+      api.revokeShare("secret-token", "file-1", "user-2"),
+    ).resolves.toBeUndefined()
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      `${API_BASE_URL}/files/file-1/shares`,
+      `${API_BASE_URL}/files/file-1/shares`,
+      `${API_BASE_URL}/files/file-1/shares/user-2`,
+    ])
+    expect(fetchMock.mock.calls[0][1].method).toBe("POST")
+    expect(fetchMock.mock.calls[0][1].headers["Content-Type"]).toBe(
+      "application/json",
+    )
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      email: "friend@example.com",
+    })
+    expect(fetchMock.mock.calls[1][1].method).toBe("GET")
+    expect(fetchMock.mock.calls[2][1].method).toBe("DELETE")
+  })
+
+  it("lists files shared with the current user", async () => {
+    const sharedFile = {
+      id: "file-1",
+      filename: "report.pdf",
+      content_type: "application/pdf",
+      size_bytes: 42,
+      checksum_sha256: null,
+      object_key: "objects/file-1",
+      state: "complete",
+      created_at: "2026-07-02T12:00:00Z",
+      completed_at: "2026-07-02T12:01:00Z",
+      deleted_at: null,
+      owner: {
+        id: "owner-1",
+        email: "owner@example.com",
+        display_name: "Owner",
+      },
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(200, { files: [sharedFile] }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(api.listSharedWithMe("secret-token")).resolves.toEqual({
+      files: [sharedFile],
+    })
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe(`${API_BASE_URL}/files/shared-with-me`)
+    expect(init.headers.Authorization).toBe("Bearer secret-token")
+  })
+
+  it("surfaces user_not_found ApiError when sharing with an unknown email", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(404, {
+          error: "user_not_found",
+          message: "No user exists for that email.",
+        }),
+      ),
+    )
+
+    const error = await api
+      .shareFile("secret-token", "file-1", "missing@example.com")
+      .catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).status).toBe(404)
+    expect((error as ApiError).code).toBe("user_not_found")
+    expect((error as ApiError).message).toBe("No user exists for that email.")
   })
 
   it("falls back to a generic error on non-JSON failures", async () => {

@@ -106,6 +106,16 @@ impl AuthRepository for PostgresAuthRepository {
             .map_err(map_sqlx_error)
     }
 
+    async fn find_user_by_email(&self, email: &str) -> Result<Option<User>, RepositoryError> {
+        let query = format!("SELECT {USER_COLUMNS} FROM users WHERE email = $1");
+        sqlx::query_as::<_, UserRow>(&query)
+            .bind(email)
+            .fetch_optional(&self.pool)
+            .await
+            .map(|row| row.map(Into::into))
+            .map_err(map_sqlx_error)
+    }
+
     async fn create_session(
         &self,
         user_id: Uuid,

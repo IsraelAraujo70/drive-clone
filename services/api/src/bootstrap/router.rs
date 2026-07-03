@@ -1,5 +1,5 @@
 use axum::Router;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use tower_http::trace::TraceLayer;
 
 use crate::adapters::http::{auth_routes, file_routes};
@@ -17,11 +17,26 @@ pub fn build_router(state: AppState, cors: CorsConfig) -> Router {
         .route("/auth/me", get(auth_routes::me))
         .route("/files/uploads", post(file_routes::create_upload))
         .route("/files", get(file_routes::list_files))
+        .route("/files/trash", get(file_routes::list_trash))
+        .route(
+            "/files/shared-with-me",
+            get(file_routes::list_shared_with_me),
+        )
         .route(
             "/files/{file_id}/complete",
             post(file_routes::complete_upload),
         )
         .route("/files/{file_id}/download", get(file_routes::download_file))
+        .route("/files/{file_id}", delete(file_routes::delete_file))
+        .route("/files/{file_id}/restore", post(file_routes::restore_file))
+        .route(
+            "/files/{file_id}/shares",
+            post(file_routes::share_file).get(file_routes::list_shares),
+        )
+        .route(
+            "/files/{file_id}/shares/{grantee_id}",
+            delete(file_routes::revoke_share),
+        )
         .layer(TraceLayer::new_for_http())
         .layer(cors.layer())
         .with_state(state)

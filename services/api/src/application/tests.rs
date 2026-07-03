@@ -11,7 +11,9 @@ use crate::application::auth::login::{LoginInput, LoginUseCase};
 use crate::application::auth::logout::LogoutUseCase;
 use crate::application::auth::signup::{SignupInput, SignupUseCase};
 use crate::application::files::{
-    CompleteUploadUseCase, CreateUploadUseCase, DownloadFileUseCase, ListFilesUseCase,
+    CompleteUploadUseCase, CreateUploadUseCase, DeleteFileUseCase, DownloadFileUseCase,
+    ListFilesUseCase, ListSharedWithMeUseCase, ListSharesUseCase, ListTrashUseCase,
+    RestoreFileUseCase, RevokeShareUseCase, ShareFileInput, ShareFileUseCase,
 };
 use crate::application::ports::RepositoryError;
 use crate::application::ports::auth::{AuthRepository, CreateUserRecord};
@@ -20,7 +22,9 @@ use crate::application::ports::files::{CreatePendingFileRecord, FileRepository};
 use crate::application::ports::id_generator::SequenceIdGenerator;
 use crate::domain::auth::{User, UserWithPassword, hash_password, hash_token};
 use crate::domain::error::DomainError;
-use crate::domain::files::{DriveFile, FileState, PendingFile, UploadRequest};
+use crate::domain::files::{
+    DriveFile, FileShare, FileState, FileUser, PendingFile, SharedFile, UploadRequest,
+};
 
 fn fixed_now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 7, 3, 12, 0, 0).unwrap()
@@ -37,6 +41,21 @@ fn user(id: Uuid, email: &str, used: i64, quota: i64) -> User {
     }
 }
 
+fn completed_file(id: Uuid, object_key: &str) -> DriveFile {
+    DriveFile {
+        id,
+        filename: "report.txt".to_string(),
+        content_type: "text/plain".to_string(),
+        size_bytes: 12,
+        checksum_sha256: None,
+        object_key: object_key.to_string(),
+        state: FileState::Complete,
+        created_at: fixed_now(),
+        completed_at: Some(fixed_now()),
+        deleted_at: None,
+    }
+}
+
 #[derive(Default)]
 struct FakeAuthRepository {
     users: Mutex<HashMap<String, UserWithPassword>>,
@@ -49,14 +68,18 @@ impl FakeAuthRepository {
     fn with_user(email: &str, password: &str) -> Arc<Self> {
         let id = Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
         let repo = Arc::new(Self::default());
-        repo.users.lock().unwrap().insert(
-            email.to_string(),
+        repo.add_user(user(id, email, 0, 100), password);
+        repo
+    }
+
+    fn add_user(&self, user: User, password: &str) {
+        self.users.lock().unwrap().insert(
+            user.email.clone(),
             UserWithPassword {
-                user: user(id, email, 0, 100),
+                user,
                 password_hash: hash_password(password).unwrap(),
             },
         );
-        repo
     }
 }
 
@@ -90,6 +113,15 @@ impl AuthRepository for FakeAuthRepository {
         email: &str,
     ) -> Result<Option<UserWithPassword>, RepositoryError> {
         Ok(self.users.lock().unwrap().get(email).cloned())
+    }
+
+    async fn find_user_by_email(&self, email: &str) -> Result<Option<User>, RepositoryError> {
+        Ok(self
+            .users
+            .lock()
+            .unwrap()
+            .get(email)
+            .map(|row| row.user.clone()))
     }
 
     async fn create_session(
@@ -132,8 +164,31 @@ impl AuthRepository for FakeAuthRepository {
 struct FakeFileRepository {
     pending_bytes: Mutex<i64>,
     pending: Mutex<HashMap<Uuid, PendingFile>>,
+    pending_owners: Mutex<HashMap<Uuid, Uuid>>,
     completed: Mutex<HashMap<Uuid, DriveFile>>,
+    owners: Mutex<HashMap<Uuid, Uuid>>,
+    users: Mutex<HashMap<Uuid, FileUser>>,
+    shares: Mutex<HashMap<(Uuid, Uuid), DateTime<Utc>>>,
     completed_count: Mutex<usize>,
+}
+
+impl FakeFileRepository {
+    fn insert_user(&self, user: &User) {
+        self.users.lock().unwrap().insert(
+            user.id,
+            FileUser {
+                id: user.id,
+                email: user.email.clone(),
+                display_name: user.display_name.clone(),
+            },
+        );
+    }
+
+    fn insert_completed(&self, owner: &User, file: DriveFile) {
+        self.insert_user(owner);
+        self.owners.lock().unwrap().insert(file.id, owner.id);
+        self.completed.lock().unwrap().insert(file.id, file);
+    }
 }
 
 #[async_trait]
@@ -158,12 +213,16 @@ impl FileRepository for FakeFileRepository {
             state: FileState::Pending,
         };
         self.pending.lock().unwrap().insert(id, file.clone());
+        self.pending_owners
+            .lock()
+            .unwrap()
+            .insert(id, input.owner_id);
         Ok(file)
     }
 
     async fn complete_upload_once(
         &self,
-        _owner_id: Uuid,
+        owner_id: Uuid,
         file_id: Uuid,
         expected_size: i64,
     ) -> Result<DriveFile, RepositoryError> {
@@ -173,6 +232,15 @@ impl FileRepository for FakeFileRepository {
             .unwrap()
             .remove(&file_id)
             .ok_or(RepositoryError::NotFound)?;
+        let pending_owner = self
+            .pending_owners
+            .lock()
+            .unwrap()
+            .remove(&file_id)
+            .ok_or(RepositoryError::NotFound)?;
+        if pending_owner != owner_id {
+            return Err(RepositoryError::NotFound);
+        }
         if pending.state != FileState::Pending || pending.size_bytes != expected_size {
             return Err(RepositoryError::InvalidState);
         }
@@ -187,32 +255,235 @@ impl FileRepository for FakeFileRepository {
             state: FileState::Complete,
             created_at: fixed_now(),
             completed_at: Some(fixed_now()),
+            deleted_at: None,
         };
+        self.owners.lock().unwrap().insert(file_id, owner_id);
         self.completed.lock().unwrap().insert(file_id, file.clone());
         Ok(file)
     }
 
     async fn find_owned_file_for_completion(
         &self,
-        _owner_id: Uuid,
+        owner_id: Uuid,
         file_id: Uuid,
     ) -> Result<Option<PendingFile>, RepositoryError> {
+        if self.pending_owners.lock().unwrap().get(&file_id).copied() != Some(owner_id) {
+            return Ok(None);
+        }
         Ok(self.pending.lock().unwrap().get(&file_id).cloned())
     }
 
     async fn list_completed_files(
         &self,
-        _owner_id: Uuid,
+        owner_id: Uuid,
     ) -> Result<Vec<DriveFile>, RepositoryError> {
-        Ok(self.completed.lock().unwrap().values().cloned().collect())
+        let owners = self.owners.lock().unwrap();
+        Ok(self
+            .completed
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|file| {
+                owners.get(&file.id).copied() == Some(owner_id) && file.deleted_at.is_none()
+            })
+            .cloned()
+            .collect())
     }
 
     async fn find_completed_owned_file(
         &self,
-        _owner_id: Uuid,
+        owner_id: Uuid,
         file_id: Uuid,
     ) -> Result<Option<DriveFile>, RepositoryError> {
-        Ok(self.completed.lock().unwrap().get(&file_id).cloned())
+        if self.owners.lock().unwrap().get(&file_id).copied() != Some(owner_id) {
+            return Ok(None);
+        }
+        Ok(self
+            .completed
+            .lock()
+            .unwrap()
+            .get(&file_id)
+            .filter(|file| file.deleted_at.is_none())
+            .cloned())
+    }
+
+    async fn find_downloadable_file(
+        &self,
+        user_id: Uuid,
+        file_id: Uuid,
+    ) -> Result<Option<DriveFile>, RepositoryError> {
+        let owner_allowed = self.owners.lock().unwrap().get(&file_id).copied() == Some(user_id);
+        let share_allowed = self
+            .shares
+            .lock()
+            .unwrap()
+            .contains_key(&(file_id, user_id));
+        if !owner_allowed && !share_allowed {
+            return Ok(None);
+        }
+        Ok(self
+            .completed
+            .lock()
+            .unwrap()
+            .get(&file_id)
+            .filter(|file| file.deleted_at.is_none())
+            .cloned())
+    }
+
+    async fn soft_delete_owned_file(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+    ) -> Result<(), RepositoryError> {
+        if self.owners.lock().unwrap().get(&file_id).copied() != Some(owner_id) {
+            return Err(RepositoryError::NotFound);
+        }
+        let mut completed = self.completed.lock().unwrap();
+        let file = completed
+            .get_mut(&file_id)
+            .filter(|file| file.state == FileState::Complete && file.deleted_at.is_none())
+            .ok_or(RepositoryError::NotFound)?;
+        file.deleted_at = Some(fixed_now());
+        Ok(())
+    }
+
+    async fn restore_owned_file(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+    ) -> Result<DriveFile, RepositoryError> {
+        if self.owners.lock().unwrap().get(&file_id).copied() != Some(owner_id) {
+            return Err(RepositoryError::NotFound);
+        }
+        let mut completed = self.completed.lock().unwrap();
+        let file = completed
+            .get_mut(&file_id)
+            .filter(|file| file.deleted_at.is_some())
+            .ok_or(RepositoryError::NotFound)?;
+        file.deleted_at = None;
+        Ok(file.clone())
+    }
+
+    async fn list_trash(&self, owner_id: Uuid) -> Result<Vec<DriveFile>, RepositoryError> {
+        let owners = self.owners.lock().unwrap();
+        Ok(self
+            .completed
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|file| {
+                owners.get(&file.id).copied() == Some(owner_id) && file.deleted_at.is_some()
+            })
+            .cloned()
+            .collect())
+    }
+
+    async fn create_share(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+        grantee_id: Uuid,
+    ) -> Result<FileShare, RepositoryError> {
+        if self.owners.lock().unwrap().get(&file_id).copied() != Some(owner_id) {
+            return Err(RepositoryError::NotFound);
+        }
+        if !self
+            .completed
+            .lock()
+            .unwrap()
+            .get(&file_id)
+            .is_some_and(|file| file.state == FileState::Complete && file.deleted_at.is_none())
+        {
+            return Err(RepositoryError::NotFound);
+        }
+        self.shares
+            .lock()
+            .unwrap()
+            .entry((file_id, grantee_id))
+            .or_insert_with(fixed_now);
+        let grantee = self
+            .users
+            .lock()
+            .unwrap()
+            .get(&grantee_id)
+            .cloned()
+            .ok_or(RepositoryError::NotFound)?;
+        Ok(FileShare {
+            file_id,
+            grantee,
+            created_at: fixed_now(),
+        })
+    }
+
+    async fn list_shares(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+    ) -> Result<Vec<FileShare>, RepositoryError> {
+        if self.owners.lock().unwrap().get(&file_id).copied() != Some(owner_id) {
+            return Err(RepositoryError::NotFound);
+        }
+        let users = self.users.lock().unwrap();
+        Ok(self
+            .shares
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|((shared_file_id, _), _)| *shared_file_id == file_id)
+            .map(|((_, grantee_id), created_at)| FileShare {
+                file_id,
+                grantee: users.get(grantee_id).cloned().unwrap(),
+                created_at: *created_at,
+            })
+            .collect())
+    }
+
+    async fn revoke_share(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+        grantee_id: Uuid,
+    ) -> Result<(), RepositoryError> {
+        if self.owners.lock().unwrap().get(&file_id).copied() != Some(owner_id) {
+            return Err(RepositoryError::NotFound);
+        }
+        if self
+            .shares
+            .lock()
+            .unwrap()
+            .remove(&(file_id, grantee_id))
+            .is_some()
+        {
+            Ok(())
+        } else {
+            Err(RepositoryError::NotFound)
+        }
+    }
+
+    async fn list_shared_with_me(
+        &self,
+        grantee_id: Uuid,
+    ) -> Result<Vec<SharedFile>, RepositoryError> {
+        let completed = self.completed.lock().unwrap();
+        let owners = self.owners.lock().unwrap();
+        let users = self.users.lock().unwrap();
+        Ok(self
+            .shares
+            .lock()
+            .unwrap()
+            .keys()
+            .filter(|(_, share_grantee_id)| *share_grantee_id == grantee_id)
+            .filter_map(|(file_id, _)| {
+                let file = completed
+                    .get(file_id)
+                    .filter(|file| file.deleted_at.is_none())?;
+                let owner_id = owners.get(file_id)?;
+                Some(SharedFile {
+                    file: file.clone(),
+                    owner: users.get(owner_id).cloned().unwrap(),
+                })
+            })
+            .collect())
     }
 }
 
@@ -356,6 +627,10 @@ async fn complete_upload_checks_storage_length_and_completes_once() {
     storage.put_object("owner/object", 9);
     let use_case = CompleteUploadUseCase::new(repo.clone(), storage.clone());
     let owner = user(Uuid::new_v4(), "owner@example.com", 0, 100);
+    repo.pending_owners
+        .lock()
+        .unwrap()
+        .insert(file_id, owner.id);
 
     assert_eq!(
         use_case.execute(&owner, file_id).await.unwrap_err(),
@@ -372,22 +647,9 @@ async fn complete_upload_checks_storage_length_and_completes_once() {
 async fn list_and_download_only_return_completed_files() {
     let repo = Arc::new(FakeFileRepository::default());
     let file_id = Uuid::parse_str("55555555-5555-4555-8555-555555555555").unwrap();
-    repo.completed.lock().unwrap().insert(
-        file_id,
-        DriveFile {
-            id: file_id,
-            filename: "report.txt".to_string(),
-            content_type: "text/plain".to_string(),
-            size_bytes: 12,
-            checksum_sha256: None,
-            object_key: "owner/object".to_string(),
-            state: FileState::Complete,
-            created_at: fixed_now(),
-            completed_at: Some(fixed_now()),
-        },
-    );
     let storage = Arc::new(FakeObjectStorage::default());
     let owner = user(Uuid::new_v4(), "owner@example.com", 0, 100);
+    repo.insert_completed(&owner, completed_file(file_id, "owner/object"));
 
     let files = ListFilesUseCase::new(repo.clone())
         .execute(&owner)
@@ -400,4 +662,329 @@ async fn list_and_download_only_return_completed_files() {
         .await
         .unwrap();
     assert!(download.download_url.contains("owner/object"));
+}
+
+#[tokio::test]
+async fn delete_restore_and_trash_are_owner_scoped() {
+    let repo = Arc::new(FakeFileRepository::default());
+    let owner = user(
+        Uuid::parse_str("66666666-6666-4666-8666-666666666666").unwrap(),
+        "owner@example.com",
+        0,
+        100,
+    );
+    let other = user(
+        Uuid::parse_str("77777777-7777-4777-8777-777777777777").unwrap(),
+        "other@example.com",
+        0,
+        100,
+    );
+    let file_id = Uuid::parse_str("88888888-8888-4888-8888-888888888888").unwrap();
+    repo.insert_completed(&owner, completed_file(file_id, "owner/deleted"));
+
+    assert_eq!(
+        DeleteFileUseCase::new(repo.clone())
+            .execute(&other, file_id)
+            .await
+            .unwrap_err(),
+        AppError::Domain(DomainError::FileNotFound)
+    );
+
+    DeleteFileUseCase::new(repo.clone())
+        .execute(&owner, file_id)
+        .await
+        .unwrap();
+    assert!(
+        ListFilesUseCase::new(repo.clone())
+            .execute(&owner)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        ListTrashUseCase::new(repo.clone())
+            .execute(&owner)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        ListTrashUseCase::new(repo.clone())
+            .execute(&other)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    assert_eq!(
+        RestoreFileUseCase::new(repo.clone())
+            .execute(&other, file_id)
+            .await
+            .unwrap_err(),
+        AppError::Domain(DomainError::FileNotFound)
+    );
+    let restored = RestoreFileUseCase::new(repo.clone())
+        .execute(&owner, file_id)
+        .await
+        .unwrap();
+    assert_eq!(restored.deleted_at, None);
+}
+
+#[tokio::test]
+async fn deleted_files_cannot_be_downloaded_or_shared_until_restored() {
+    let repo = Arc::new(FakeFileRepository::default());
+    let storage = Arc::new(FakeObjectStorage::default());
+    let auth_repo = Arc::new(FakeAuthRepository::default());
+    let owner = user(
+        Uuid::parse_str("99999999-9999-4999-8999-999999999999").unwrap(),
+        "owner@example.com",
+        0,
+        100,
+    );
+    let grantee = user(
+        Uuid::parse_str("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").unwrap(),
+        "friend@example.com",
+        0,
+        100,
+    );
+    auth_repo.add_user(grantee.clone(), "password123");
+    repo.insert_completed(&owner, completed_file(grantee.id, "owner/shared"));
+    repo.insert_user(&grantee);
+
+    DeleteFileUseCase::new(repo.clone())
+        .execute(&owner, grantee.id)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        DownloadFileUseCase::new(repo.clone(), storage, 900)
+            .execute(&owner, grantee.id)
+            .await
+            .unwrap_err(),
+        AppError::Domain(DomainError::FileNotFound)
+    );
+    assert_eq!(
+        ShareFileUseCase::new(repo.clone(), auth_repo)
+            .execute(
+                &owner,
+                ShareFileInput {
+                    file_id: grantee.id,
+                    email: "friend@example.com".to_string(),
+                },
+            )
+            .await
+            .unwrap_err(),
+        AppError::Domain(DomainError::FileNotFound)
+    );
+}
+
+#[tokio::test]
+async fn share_file_is_idempotent_and_rejects_self_or_unknown_email() {
+    let repo = Arc::new(FakeFileRepository::default());
+    let auth_repo = Arc::new(FakeAuthRepository::default());
+    let owner = user(
+        Uuid::parse_str("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb").unwrap(),
+        "owner@example.com",
+        0,
+        100,
+    );
+    let grantee = user(
+        Uuid::parse_str("cccccccc-cccc-4ccc-8ccc-cccccccccccc").unwrap(),
+        "friend@example.com",
+        0,
+        100,
+    );
+    auth_repo.add_user(owner.clone(), "password123");
+    auth_repo.add_user(grantee.clone(), "password123");
+    repo.insert_completed(&owner, completed_file(owner.id, "owner/shared"));
+    repo.insert_user(&grantee);
+    let use_case = ShareFileUseCase::new(repo.clone(), auth_repo.clone());
+
+    let share = use_case
+        .execute(
+            &owner,
+            ShareFileInput {
+                file_id: owner.id,
+                email: " FRIEND@example.com ".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+    let duplicate = use_case
+        .execute(
+            &owner,
+            ShareFileInput {
+                file_id: owner.id,
+                email: "friend@example.com".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(share.grantee.id, grantee.id);
+    assert_eq!(duplicate.grantee.id, grantee.id);
+    assert_eq!(repo.shares.lock().unwrap().len(), 1);
+
+    assert_eq!(
+        use_case
+            .execute(
+                &owner,
+                ShareFileInput {
+                    file_id: owner.id,
+                    email: "owner@example.com".to_string(),
+                },
+            )
+            .await
+            .unwrap_err(),
+        AppError::Domain(DomainError::Validation("Cannot share a file with yourself"))
+    );
+    assert_eq!(
+        use_case
+            .execute(
+                &owner,
+                ShareFileInput {
+                    file_id: owner.id,
+                    email: "missing@example.com".to_string(),
+                },
+            )
+            .await
+            .unwrap_err(),
+        AppError::Domain(DomainError::UserNotFound)
+    );
+}
+
+#[tokio::test]
+async fn share_lists_revoke_and_shared_with_me_are_scoped() {
+    let repo = Arc::new(FakeFileRepository::default());
+    let owner = user(
+        Uuid::parse_str("dddddddd-dddd-4ddd-8ddd-dddddddddddd").unwrap(),
+        "owner@example.com",
+        0,
+        100,
+    );
+    let grantee = user(
+        Uuid::parse_str("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee").unwrap(),
+        "friend@example.com",
+        0,
+        100,
+    );
+    let other = user(
+        Uuid::parse_str("ffffffff-ffff-4fff-8fff-ffffffffffff").unwrap(),
+        "other@example.com",
+        0,
+        100,
+    );
+    let file_id = Uuid::parse_str("12121212-1212-4212-8212-121212121212").unwrap();
+    repo.insert_completed(&owner, completed_file(file_id, "owner/shared"));
+    repo.insert_user(&grantee);
+    repo.shares
+        .lock()
+        .unwrap()
+        .insert((file_id, grantee.id), fixed_now());
+
+    let shares = ListSharesUseCase::new(repo.clone())
+        .execute(&owner, file_id)
+        .await
+        .unwrap();
+    assert_eq!(shares.len(), 1);
+    assert_eq!(shares[0].grantee.id, grantee.id);
+    assert_eq!(
+        ListSharesUseCase::new(repo.clone())
+            .execute(&other, file_id)
+            .await
+            .unwrap_err(),
+        AppError::Domain(DomainError::FileNotFound)
+    );
+
+    let shared = ListSharedWithMeUseCase::new(repo.clone())
+        .execute(&grantee)
+        .await
+        .unwrap();
+    assert_eq!(shared.len(), 1);
+    assert_eq!(shared[0].owner.id, owner.id);
+    assert!(
+        ListSharedWithMeUseCase::new(repo.clone())
+            .execute(&other)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    assert_eq!(
+        RevokeShareUseCase::new(repo.clone())
+            .execute(&other, file_id, grantee.id)
+            .await
+            .unwrap_err(),
+        AppError::Domain(DomainError::FileNotFound)
+    );
+    RevokeShareUseCase::new(repo.clone())
+        .execute(&owner, file_id, grantee.id)
+        .await
+        .unwrap();
+    assert!(
+        ListSharedWithMeUseCase::new(repo.clone())
+            .execute(&grantee)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn shared_grantee_can_download_until_share_is_revoked_or_file_deleted() {
+    let repo = Arc::new(FakeFileRepository::default());
+    let storage = Arc::new(FakeObjectStorage::default());
+    let owner = user(
+        Uuid::parse_str("13131313-1313-4313-8313-131313131313").unwrap(),
+        "owner@example.com",
+        0,
+        100,
+    );
+    let grantee = user(
+        Uuid::parse_str("14141414-1414-4414-8414-141414141414").unwrap(),
+        "friend@example.com",
+        0,
+        100,
+    );
+    let file_id = Uuid::parse_str("15151515-1515-4515-8515-151515151515").unwrap();
+    repo.insert_completed(&owner, completed_file(file_id, "owner/download"));
+    repo.insert_user(&grantee);
+    repo.shares
+        .lock()
+        .unwrap()
+        .insert((file_id, grantee.id), fixed_now());
+
+    let download = DownloadFileUseCase::new(repo.clone(), storage.clone(), 900)
+        .execute(&grantee, file_id)
+        .await
+        .unwrap();
+    assert!(download.download_url.contains("owner/download"));
+
+    RevokeShareUseCase::new(repo.clone())
+        .execute(&owner, file_id, grantee.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        DownloadFileUseCase::new(repo.clone(), storage.clone(), 900)
+            .execute(&grantee, file_id)
+            .await
+            .unwrap_err(),
+        AppError::Domain(DomainError::FileNotFound)
+    );
+
+    repo.shares
+        .lock()
+        .unwrap()
+        .insert((file_id, grantee.id), fixed_now());
+    DeleteFileUseCase::new(repo.clone())
+        .execute(&owner, file_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        DownloadFileUseCase::new(repo, storage, 900)
+            .execute(&grantee, file_id)
+            .await
+            .unwrap_err(),
+        AppError::Domain(DomainError::FileNotFound)
+    );
 }

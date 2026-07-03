@@ -60,6 +60,37 @@ fn upload_body(size_bytes: i64) -> Value {
     })
 }
 
+async fn create_completed_file(
+    app: Router,
+    storage: Arc<FakeObjectStorage>,
+    token: &str,
+    size_bytes: i64,
+) -> (String, String) {
+    let (status, upload) = request(
+        app.clone(),
+        "POST",
+        "/files/uploads",
+        Some(token),
+        Some(upload_body(size_bytes)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let file_id = upload["file_id"].as_str().unwrap().to_string();
+    let object_key = upload["object_key"].as_str().unwrap().to_string();
+    storage.put_object(&object_key, size_bytes);
+    let (status, completed) = request(
+        app,
+        "POST",
+        &format!("/files/{file_id}/complete"),
+        Some(token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(completed["deleted_at"], Value::Null);
+    (file_id, object_key)
+}
+
 #[sqlx::test]
 async fn signup_creates_account_and_session(pool: PgPool) {
     let app = drive_clone_api::app(pool);
@@ -193,11 +224,255 @@ async fn file_routes_require_auth(pool: PgPool) {
     for (method, uri, body) in [
         ("POST", "/files/uploads", Some(upload_body(10))),
         ("GET", "/files", None),
+        ("GET", "/files/trash", None),
+        ("GET", "/files/shared-with-me", None),
     ] {
         let (status, response) = request(app.clone(), method, uri, None, body).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert_eq!(response["error"], "unauthorized");
     }
+}
+
+#[sqlx::test]
+async fn soft_delete_restore_and_trash_follow_contract(pool: PgPool) {
+    let storage = Arc::new(FakeObjectStorage::default());
+    let app = app_with_storage(pool, storage.clone());
+    let owner_token = signup(app.clone(), "trash-owner@example.com").await;
+    let other_token = signup(app.clone(), "trash-other@example.com").await;
+    let (file_id, object_key) = create_completed_file(app.clone(), storage, &owner_token, 12).await;
+
+    let (status, body) = request(
+        app.clone(),
+        "DELETE",
+        &format!("/files/{file_id}"),
+        Some(&other_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "file_not_found");
+
+    let (status, body) = request(
+        app.clone(),
+        "DELETE",
+        &format!("/files/{file_id}"),
+        Some(&owner_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(body, Value::Null);
+
+    let (status, body) = request(app.clone(), "GET", "/files", Some(&owner_token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["files"].as_array().unwrap().len(), 0);
+
+    let (status, body) =
+        request(app.clone(), "GET", "/files/trash", Some(&owner_token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["files"].as_array().unwrap().len(), 1);
+    assert_eq!(body["files"][0]["id"], file_id);
+    assert!(body["files"][0]["deleted_at"].as_str().is_some());
+
+    let (status, body) = request(
+        app.clone(),
+        "GET",
+        &format!("/files/{file_id}/download"),
+        Some(&owner_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "file_not_found");
+
+    let (status, restored) = request(
+        app.clone(),
+        "POST",
+        &format!("/files/{file_id}/restore"),
+        Some(&owner_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(restored["deleted_at"], Value::Null);
+
+    let (status, body) = request(
+        app,
+        "GET",
+        &format!("/files/{file_id}/download"),
+        Some(&owner_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["download_url"].as_str().unwrap().contains(&object_key));
+}
+
+#[sqlx::test]
+async fn shares_allow_grantee_download_and_can_be_listed_or_revoked(pool: PgPool) {
+    let storage = Arc::new(FakeObjectStorage::default());
+    let app = app_with_storage(pool, storage.clone());
+    let owner_token = signup(app.clone(), "share-owner@example.com").await;
+    let grantee_token = signup(app.clone(), "share-friend@example.com").await;
+    let other_token = signup(app.clone(), "share-other@example.com").await;
+    let (file_id, object_key) = create_completed_file(app.clone(), storage, &owner_token, 14).await;
+
+    let (status, share) = request(
+        app.clone(),
+        "POST",
+        &format!("/files/{file_id}/shares"),
+        Some(&owner_token),
+        Some(json!({"email": "share-friend@example.com"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(share["file_id"], file_id);
+    assert_eq!(share["grantee"]["email"], "share-friend@example.com");
+    let grantee_id = share["grantee"]["id"].as_str().unwrap();
+
+    let (status, duplicate) = request(
+        app.clone(),
+        "POST",
+        &format!("/files/{file_id}/shares"),
+        Some(&owner_token),
+        Some(json!({"email": "SHARE-FRIEND@example.com"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(duplicate["created_at"], share["created_at"]);
+
+    let (status, body) = request(
+        app.clone(),
+        "GET",
+        &format!("/files/{file_id}/shares"),
+        Some(&owner_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["shares"].as_array().unwrap().len(), 1);
+
+    let (status, body) = request(
+        app.clone(),
+        "GET",
+        &format!("/files/{file_id}/shares"),
+        Some(&other_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "file_not_found");
+
+    let (status, body) = request(
+        app.clone(),
+        "GET",
+        "/files/shared-with-me",
+        Some(&grantee_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["files"].as_array().unwrap().len(), 1);
+    assert_eq!(body["files"][0]["id"], file_id);
+    assert_eq!(
+        body["files"][0]["owner"]["email"],
+        "share-owner@example.com"
+    );
+
+    let (status, body) = request(
+        app.clone(),
+        "GET",
+        &format!("/files/{file_id}/download"),
+        Some(&grantee_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["download_url"].as_str().unwrap().contains(&object_key));
+
+    let (status, body) = request(
+        app.clone(),
+        "DELETE",
+        &format!("/files/{file_id}/shares/{grantee_id}"),
+        Some(&other_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "file_not_found");
+
+    let (status, _) = request(
+        app.clone(),
+        "DELETE",
+        &format!("/files/{file_id}/shares/{grantee_id}"),
+        Some(&owner_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, body) = request(
+        app,
+        "GET",
+        &format!("/files/{file_id}/download"),
+        Some(&grantee_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "file_not_found");
+}
+
+#[sqlx::test]
+async fn share_rejects_self_unknown_email_and_deleted_files(pool: PgPool) {
+    let storage = Arc::new(FakeObjectStorage::default());
+    let app = app_with_storage(pool, storage.clone());
+    let owner_token = signup(app.clone(), "share-rules-owner@example.com").await;
+    signup(app.clone(), "share-rules-friend@example.com").await;
+    let (file_id, _) = create_completed_file(app.clone(), storage, &owner_token, 10).await;
+
+    let (status, body) = request(
+        app.clone(),
+        "POST",
+        &format!("/files/{file_id}/shares"),
+        Some(&owner_token),
+        Some(json!({"email": "share-rules-owner@example.com"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"], "validation_error");
+
+    let (status, body) = request(
+        app.clone(),
+        "POST",
+        &format!("/files/{file_id}/shares"),
+        Some(&owner_token),
+        Some(json!({"email": "missing-share-user@example.com"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "user_not_found");
+
+    let (status, _) = request(
+        app.clone(),
+        "DELETE",
+        &format!("/files/{file_id}"),
+        Some(&owner_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, body) = request(
+        app,
+        "POST",
+        &format!("/files/{file_id}/shares"),
+        Some(&owner_token),
+        Some(json!({"email": "share-rules-friend@example.com"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "file_not_found");
 }
 
 #[sqlx::test]

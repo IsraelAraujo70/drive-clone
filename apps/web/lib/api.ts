@@ -28,6 +28,23 @@ export type FileRecord = {
   state: "pending" | "complete"
   created_at: string
   completed_at: string | null
+  deleted_at: string | null
+}
+
+export type ShareUser = {
+  id: string
+  email: string
+  display_name: string
+}
+
+export type Share = {
+  file_id: string
+  grantee: ShareUser
+  created_at: string
+}
+
+export type SharedFileRecord = FileRecord & {
+  owner: ShareUser
 }
 
 export type CreateUploadInput = {
@@ -46,6 +63,14 @@ export type CreateUploadResponse = {
 
 export type ListFilesResponse = {
   files: FileRecord[]
+}
+
+export type ListSharedFilesResponse = {
+  files: SharedFileRecord[]
+}
+
+export type ListSharesResponse = {
+  shares: Share[]
 }
 
 export type DownloadResponse = {
@@ -165,6 +190,26 @@ export const api = {
   completeUpload: (token: string, fileId: string) =>
     request<FileRecord>(`/files/${fileId}/complete`, { method: "POST", token }),
   listFiles: (token: string) => request<ListFilesResponse>("/files", { token }),
+  deleteFile: (token: string, fileId: string) =>
+    request<void>(`/files/${fileId}`, { method: "DELETE", token }),
+  restoreFile: (token: string, fileId: string) =>
+    request<FileRecord>(`/files/${fileId}/restore`, { method: "POST", token }),
+  listTrash: (token: string) => request<ListFilesResponse>("/files/trash", { token }),
+  shareFile: (token: string, fileId: string, email: string) =>
+    request<Share>(`/files/${fileId}/shares`, {
+      method: "POST",
+      token,
+      body: { email },
+    }),
+  listShares: (token: string, fileId: string) =>
+    request<ListSharesResponse>(`/files/${fileId}/shares`, { token }),
+  revokeShare: (token: string, fileId: string, granteeId: string) =>
+    request<void>(`/files/${fileId}/shares/${granteeId}`, {
+      method: "DELETE",
+      token,
+    }),
+  listSharedWithMe: (token: string) =>
+    request<ListSharedFilesResponse>("/files/shared-with-me", { token }),
   createDownload: (token: string, fileId: string) =>
     request<DownloadResponse>(`/files/${fileId}/download`, { token }),
   health: () => request<{ status: string; service: string }>("/health"),

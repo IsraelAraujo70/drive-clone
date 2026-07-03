@@ -5,7 +5,9 @@ use sqlx::PgPool;
 use crate::adapters::postgres::{PostgresAuthRepository, PostgresFileRepository};
 use crate::application::auth::{GetCurrentUserUseCase, LoginUseCase, LogoutUseCase, SignupUseCase};
 use crate::application::files::{
-    CompleteUploadUseCase, CreateUploadUseCase, DownloadFileUseCase, ListFilesUseCase,
+    CompleteUploadUseCase, CreateUploadUseCase, DeleteFileUseCase, DownloadFileUseCase,
+    ListFilesUseCase, ListSharedWithMeUseCase, ListSharesUseCase, ListTrashUseCase,
+    RestoreFileUseCase, RevokeShareUseCase, ShareFileUseCase,
 };
 use crate::application::ports::auth::AuthRepository;
 use crate::application::ports::clock::{Clock, SystemClock};
@@ -24,6 +26,13 @@ pub struct AppState {
     pub complete_upload: CompleteUploadUseCase,
     pub list_files: ListFilesUseCase,
     pub download_file: DownloadFileUseCase,
+    pub delete_file: DeleteFileUseCase,
+    pub restore_file: RestoreFileUseCase,
+    pub list_trash: ListTrashUseCase,
+    pub share_file: ShareFileUseCase,
+    pub list_shares: ListSharesUseCase,
+    pub revoke_share: RevokeShareUseCase,
+    pub list_shared_with_me: ListSharedWithMeUseCase,
 }
 
 impl AppState {
@@ -45,7 +54,7 @@ impl AppState {
             signup: SignupUseCase::new(auth_repository.clone(), clock.clone()),
             login: LoginUseCase::new(auth_repository.clone(), clock.clone()),
             logout: LogoutUseCase::new(auth_repository.clone()),
-            get_current_user: GetCurrentUserUseCase::new(auth_repository, clock),
+            get_current_user: GetCurrentUserUseCase::new(auth_repository.clone(), clock),
             create_upload: CreateUploadUseCase::new(
                 file_repository.clone(),
                 storage.clone(),
@@ -55,6 +64,13 @@ impl AppState {
             ),
             complete_upload: CompleteUploadUseCase::new(file_repository.clone(), storage.clone()),
             list_files: ListFilesUseCase::new(file_repository.clone()),
+            delete_file: DeleteFileUseCase::new(file_repository.clone()),
+            restore_file: RestoreFileUseCase::new(file_repository.clone()),
+            list_trash: ListTrashUseCase::new(file_repository.clone()),
+            share_file: ShareFileUseCase::new(file_repository.clone(), auth_repository.clone()),
+            list_shares: ListSharesUseCase::new(file_repository.clone()),
+            revoke_share: RevokeShareUseCase::new(file_repository.clone()),
+            list_shared_with_me: ListSharedWithMeUseCase::new(file_repository.clone()),
             download_file: DownloadFileUseCase::new(
                 file_repository,
                 storage,

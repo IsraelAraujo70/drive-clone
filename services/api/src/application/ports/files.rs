@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::application::ports::RepositoryError;
-use crate::domain::files::{DriveFile, PendingFile};
+use crate::domain::files::{DriveFile, FileShare, PendingFile, SharedFile};
 
 #[derive(Debug, Clone)]
 pub struct CreatePendingFileRecord {
@@ -48,4 +48,49 @@ pub trait FileRepository: Send + Sync {
         owner_id: Uuid,
         file_id: Uuid,
     ) -> Result<Option<DriveFile>, RepositoryError>;
+
+    async fn find_downloadable_file(
+        &self,
+        user_id: Uuid,
+        file_id: Uuid,
+    ) -> Result<Option<DriveFile>, RepositoryError>;
+
+    async fn soft_delete_owned_file(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+    ) -> Result<(), RepositoryError>;
+
+    async fn restore_owned_file(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+    ) -> Result<DriveFile, RepositoryError>;
+
+    async fn list_trash(&self, owner_id: Uuid) -> Result<Vec<DriveFile>, RepositoryError>;
+
+    async fn create_share(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+        grantee_id: Uuid,
+    ) -> Result<FileShare, RepositoryError>;
+
+    async fn list_shares(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+    ) -> Result<Vec<FileShare>, RepositoryError>;
+
+    async fn revoke_share(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+        grantee_id: Uuid,
+    ) -> Result<(), RepositoryError>;
+
+    async fn list_shared_with_me(
+        &self,
+        grantee_id: Uuid,
+    ) -> Result<Vec<SharedFile>, RepositoryError>;
 }

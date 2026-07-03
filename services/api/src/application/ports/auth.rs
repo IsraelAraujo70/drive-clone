@@ -21,6 +21,8 @@ pub trait AuthRepository: Send + Sync {
         email: &str,
     ) -> Result<Option<UserWithPassword>, RepositoryError>;
 
+    async fn find_user_by_email(&self, email: &str) -> Result<Option<User>, RepositoryError>;
+
     async fn create_session(
         &self,
         user_id: Uuid,

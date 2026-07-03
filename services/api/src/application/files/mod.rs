@@ -1,9 +1,23 @@
 pub mod complete_upload;
 pub mod create_upload;
+pub mod delete_file;
 pub mod download_file;
 pub mod list_files;
+pub mod list_shared_with_me;
+pub mod list_shares;
+pub mod list_trash;
+pub mod restore_file;
+pub mod revoke_share;
+pub mod share_file;
 
 pub use complete_upload::CompleteUploadUseCase;
 pub use create_upload::{CreateUploadOutput, CreateUploadUseCase};
+pub use delete_file::DeleteFileUseCase;
 pub use download_file::{DownloadFileOutput, DownloadFileUseCase};
 pub use list_files::ListFilesUseCase;
+pub use list_shared_with_me::ListSharedWithMeUseCase;
+pub use list_shares::ListSharesUseCase;
+pub use list_trash::ListTrashUseCase;
+pub use restore_file::RestoreFileUseCase;
+pub use revoke_share::RevokeShareUseCase;
+pub use share_file::{ShareFileInput, ShareFileUseCase};

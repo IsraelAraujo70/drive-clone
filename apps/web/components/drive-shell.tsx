@@ -1,10 +1,28 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react"
 import { useRouter } from "next/navigation"
-import { AlertCircle, Download, FileIcon, FolderOpen, Search, Upload } from "lucide-react"
+import {
+  AlertCircle,
+  Download,
+  FileIcon,
+  FolderOpen,
+  Inbox,
+  RotateCcw,
+  Search,
+  Share2,
+  Trash2,
+  Upload,
+} from "lucide-react"
 
-import { AppSidebar } from "@/components/app-sidebar"
+import { AppSidebar, type DriveView } from "@/components/app-sidebar"
 import { CommandMenuProvider, useCommandMenu } from "@/components/command-menu"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -18,6 +36,14 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
   Empty,
   EmptyContent,
   EmptyDescription,
@@ -25,12 +51,27 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
+import {
+  Field,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { Progress } from "@/components/ui/progress"
 import { Separator } from "@/components/ui/separator"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { Spinner } from "@/components/ui/spinner"
-import { api, uploadFileDirect, type FileRecord, type User } from "@/lib/api"
+import {
+  ApiError,
+  api,
+  uploadFileDirect,
+  type FileRecord,
+  type Share,
+  type SharedFileRecord,
+  type User,
+} from "@/lib/api"
 import { useAuth } from "@/lib/auth"
 import { formatBytes } from "@/lib/format"
 import { useModifierSymbol } from "@/lib/platform"
@@ -78,6 +119,43 @@ const dateFormatter = new Intl.DateTimeFormat(undefined, {
   timeStyle: "short",
 })
 
+const viewCopy: Record<
+  DriveView,
+  {
+    title: string
+    description: string
+    cardDescription: string
+    cardTitle: string
+    emptyTitle: string
+    emptyDescription: string
+  }
+> = {
+  "my-drive": {
+    title: "My Drive",
+    description: "Files you own and can share.",
+    cardDescription: "Object storage",
+    cardTitle: "Files",
+    emptyTitle: "No files yet",
+    emptyDescription: "Upload a file to store it in your drive.",
+  },
+  "shared-with-me": {
+    title: "Shared with me",
+    description: "Files other users shared with your account.",
+    cardDescription: "Shared access",
+    cardTitle: "Shared files",
+    emptyTitle: "Nothing shared yet",
+    emptyDescription: "Files shared with you will appear here.",
+  },
+  trash: {
+    title: "Trash",
+    description: "Deleted files you can restore.",
+    cardDescription: "Deleted files",
+    cardTitle: "Trash",
+    emptyTitle: "Trash is empty",
+    emptyDescription: "Deleted files will appear here until they are restored.",
+  },
+}
+
 function formatDate(value: string | null): string {
   if (!value) {
     return "Pending"
@@ -89,23 +167,240 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Something went wrong. Try again."
 }
 
+function getApiErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    return `${error.code}: ${error.message}`
+  }
+  return getErrorMessage(error)
+}
+
+function isSharedFile(file: FileRecord | SharedFileRecord): file is SharedFileRecord {
+  return "owner" in file
+}
+
+function ShareDialog({
+  file,
+  token,
+  open,
+  onOpenChange,
+}: {
+  file: FileRecord | null
+  token: string | null
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const [shares, setShares] = useState<Share[]>([])
+  const [email, setEmail] = useState("")
+  const [loading, setLoading] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [revokeId, setRevokeId] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const loadShares = useCallback(async () => {
+    if (!token || !file) {
+      setShares([])
+      return
+    }
+
+    setLoading(true)
+    setError(null)
+    try {
+      const response = await api.listShares(token, file.id)
+      setShares(response.shares)
+    } catch (caught) {
+      setError(getApiErrorMessage(caught))
+    } finally {
+      setLoading(false)
+    }
+  }, [file, token])
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      void loadShares()
+    }, 0)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [loadShares, open])
+
+  function handleOpenChange(nextOpen: boolean) {
+    if (!nextOpen) {
+      setEmail("")
+      setError(null)
+      setShares([])
+    }
+    onOpenChange(nextOpen)
+  }
+
+  async function handleShare(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!token || !file) {
+      setError("unauthorized: Your session expired. Log in again to share files.")
+      return
+    }
+
+    setSubmitting(true)
+    setError(null)
+    try {
+      await api.shareFile(token, file.id, email.trim())
+      setEmail("")
+      await loadShares()
+    } catch (caught) {
+      setError(getApiErrorMessage(caught))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleRevoke(granteeId: string) {
+    if (!token || !file) {
+      setError("unauthorized: Your session expired. Log in again to revoke access.")
+      return
+    }
+
+    setRevokeId(granteeId)
+    setError(null)
+    try {
+      await api.revokeShare(token, file.id, granteeId)
+      await loadShares()
+    } catch (caught) {
+      setError(getApiErrorMessage(caught))
+    } finally {
+      setRevokeId(null)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Share file</DialogTitle>
+          <DialogDescription className="truncate">
+            {file ? file.filename : "Select a file to manage sharing."}
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={handleShare}>
+          <FieldGroup>
+            <Field data-invalid={Boolean(error)}>
+              <FieldLabel htmlFor="share-email">Grant access by email</FieldLabel>
+              <div className="flex gap-2">
+                <Input
+                  id="share-email"
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="friend@example.com"
+                  aria-invalid={Boolean(error)}
+                  disabled={submitting}
+                  required
+                />
+                <Button type="submit" disabled={submitting || !email.trim()}>
+                  {submitting && <Spinner data-icon="inline-start" />}
+                  Share
+                </Button>
+              </div>
+              {error && <FieldError>{error}</FieldError>}
+            </Field>
+          </FieldGroup>
+        </form>
+
+        <div className="flex flex-col gap-2">
+          <div className="text-sm font-medium">Current grantees</div>
+          {loading ? (
+            <div className="text-muted-foreground flex items-center gap-2 text-sm">
+              <Spinner />
+              Loading shares…
+            </div>
+          ) : shares.length === 0 ? (
+            <p className="text-muted-foreground text-sm">
+              This file is not shared with anyone.
+            </p>
+          ) : (
+            shares.map((share) => (
+              <div
+                key={share.grantee.id}
+                className="border-border flex items-center gap-3 rounded-lg border p-3"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-medium">
+                    {share.grantee.display_name}
+                  </div>
+                  <div className="text-muted-foreground truncate text-xs">
+                    {share.grantee.email}
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handleRevoke(share.grantee.id)}
+                  disabled={revokeId === share.grantee.id}
+                >
+                  {revokeId === share.grantee.id && (
+                    <Spinner data-icon="inline-start" />
+                  )}
+                  Revoke
+                </Button>
+              </div>
+            ))
+          )}
+        </div>
+
+        <DialogFooter showCloseButton />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export function DriveShell() {
   const { user, token, logout, refreshUser } = useAuth()
   const router = useRouter()
   const inputRef = useRef<HTMLInputElement>(null)
+  const [activeView, setActiveView] = useState<DriveView>("my-drive")
   const [files, setFiles] = useState<FileRecord[]>([])
+  const [trashFiles, setTrashFiles] = useState<FileRecord[]>([])
+  const [sharedFiles, setSharedFiles] = useState<SharedFileRecord[]>([])
   const [loadingFiles, setLoadingFiles] = useState(true)
   const [uploadingName, setUploadingName] = useState<string | null>(null)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [downloadId, setDownloadId] = useState<string | null>(null)
+  const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [restoreId, setRestoreId] = useState<string | null>(null)
+  const [shareFile, setShareFile] = useState<FileRecord | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const completedFiles = useMemo(
     () => files.filter((file) => file.state === "complete"),
     [files],
   )
+  const completedTrashFiles = useMemo(
+    () => trashFiles.filter((file) => file.state === "complete"),
+    [trashFiles],
+  )
+  const completedSharedFiles = useMemo(
+    () => sharedFiles.filter((file) => file.state === "complete"),
+    [sharedFiles],
+  )
 
-  const loadFiles = useCallback(async () => {
+  const visibleFiles = useMemo(() => {
+    if (activeView === "trash") {
+      return completedTrashFiles
+    }
+    if (activeView === "shared-with-me") {
+      return completedSharedFiles
+    }
+    return completedFiles
+  }, [activeView, completedFiles, completedSharedFiles, completedTrashFiles])
+
+  const copy = viewCopy[activeView]
+
+  const loadActiveView = useCallback(async () => {
     if (!token) {
       setLoadingFiles(false)
       return
@@ -114,24 +409,32 @@ export function DriveShell() {
     setLoadingFiles(true)
     setError(null)
     try {
-      const response = await api.listFiles(token)
-      setFiles(response.files)
+      if (activeView === "trash") {
+        const response = await api.listTrash(token)
+        setTrashFiles(response.files)
+      } else if (activeView === "shared-with-me") {
+        const response = await api.listSharedWithMe(token)
+        setSharedFiles(response.files)
+      } else {
+        const response = await api.listFiles(token)
+        setFiles(response.files)
+      }
     } catch (caught) {
-      setError(getErrorMessage(caught))
+      setError(getApiErrorMessage(caught))
     } finally {
       setLoadingFiles(false)
     }
-  }, [token])
+  }, [activeView, token])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      void loadFiles()
+      void loadActiveView()
     }, 0)
 
     return () => {
       window.clearTimeout(timer)
     }
-  }, [loadFiles])
+  }, [loadActiveView])
 
   if (!user) {
     return null // RequireAuth guarantees a user; this satisfies the type checker
@@ -149,6 +452,7 @@ export function DriveShell() {
     }
 
     setError(null)
+    setActiveView("my-drive")
     setUploadingName(file.name)
     setUploadProgress(0)
 
@@ -166,9 +470,10 @@ export function DriveShell() {
 
       await api.completeUpload(token, upload.file_id)
       await refreshUser()
-      await loadFiles()
+      const response = await api.listFiles(token)
+      setFiles(response.files)
     } catch (caught) {
-      setError(getErrorMessage(caught))
+      setError(getApiErrorMessage(caught))
     } finally {
       setUploadingName(null)
       setUploadProgress(0)
@@ -190,31 +495,69 @@ export function DriveShell() {
       const response = await api.createDownload(token, fileId)
       window.location.assign(response.download_url)
     } catch (caught) {
-      setError(getErrorMessage(caught))
+      setError(getApiErrorMessage(caught))
     } finally {
       setDownloadId(null)
+    }
+  }
+
+  async function handleDelete(fileId: string) {
+    if (!token) {
+      setError("Your session expired. Log in again to delete files.")
+      return
+    }
+
+    setError(null)
+    setDeleteId(fileId)
+    try {
+      await api.deleteFile(token, fileId)
+      await refreshUser()
+      await loadActiveView()
+    } catch (caught) {
+      setError(getApiErrorMessage(caught))
+    } finally {
+      setDeleteId(null)
+    }
+  }
+
+  async function handleRestore(fileId: string) {
+    if (!token) {
+      setError("Your session expired. Log in again to restore files.")
+      return
+    }
+
+    setError(null)
+    setRestoreId(fileId)
+    try {
+      await api.restoreFile(token, fileId)
+      await refreshUser()
+      await loadActiveView()
+    } catch (caught) {
+      setError(getApiErrorMessage(caught))
+    } finally {
+      setRestoreId(null)
     }
   }
 
   return (
     <SidebarProvider>
       <CommandMenuProvider>
-        <AppSidebar />
+        <AppSidebar activeView={activeView} onViewChange={setActiveView} />
         <SidebarInset>
           <DriveHeader user={user} onLogout={handleLogout} />
 
           <main className="flex flex-col gap-5 p-6 md:p-7">
             <div>
               <h1 className="font-heading text-3xl font-bold tracking-tight">
-                My Drive
+                {copy.title}
               </h1>
-              <p className="text-muted-foreground">Signed in as {user.email}.</p>
+              <p className="text-muted-foreground">{copy.description}</p>
             </div>
 
             <div className="grid gap-4 sm:grid-cols-3">
               <Card>
                 <CardHeader>
-                  <CardDescription>Files</CardDescription>
+                  <CardDescription>My files</CardDescription>
                   <CardTitle className="font-heading text-2xl">
                     {completedFiles.length}
                   </CardTitle>
@@ -222,8 +565,10 @@ export function DriveShell() {
               </Card>
               <Card>
                 <CardHeader>
-                  <CardDescription>Folders</CardDescription>
-                  <CardTitle className="font-heading text-2xl">0</CardTitle>
+                  <CardDescription>Shared with me</CardDescription>
+                  <CardTitle className="font-heading text-2xl">
+                    {completedSharedFiles.length}
+                  </CardTitle>
                 </CardHeader>
               </Card>
               <Card>
@@ -273,24 +618,26 @@ export function DriveShell() {
 
             <Card>
               <CardHeader>
-                <CardDescription>Object storage</CardDescription>
-                <CardTitle>Files</CardTitle>
+                <CardDescription>{copy.cardDescription}</CardDescription>
+                <CardTitle>{copy.cardTitle}</CardTitle>
                 <CardAction className="flex gap-2">
                   <Button
                     variant="outline"
-                    onClick={loadFiles}
+                    onClick={loadActiveView}
                     disabled={loadingFiles || Boolean(uploadingName)}
                   >
                     {loadingFiles && <Spinner data-icon="inline-start" />}
                     Reload
                   </Button>
-                  <Button
-                    onClick={() => inputRef.current?.click()}
-                    disabled={Boolean(uploadingName)}
-                  >
-                    <Upload data-icon="inline-start" />
-                    Upload
-                  </Button>
+                  {activeView === "my-drive" && (
+                    <Button
+                      onClick={() => inputRef.current?.click()}
+                      disabled={Boolean(uploadingName)}
+                    >
+                      <Upload data-icon="inline-start" />
+                      Upload
+                    </Button>
+                  )}
                 </CardAction>
               </CardHeader>
               <CardContent>
@@ -299,27 +646,33 @@ export function DriveShell() {
                     <Spinner />
                     Loading files…
                   </div>
-                ) : completedFiles.length === 0 ? (
+                ) : visibleFiles.length === 0 ? (
                   <Empty>
                     <EmptyHeader>
                       <EmptyMedia variant="icon">
-                        <FolderOpen />
+                        {activeView === "trash" ? (
+                          <Trash2 />
+                        ) : activeView === "shared-with-me" ? (
+                          <Inbox />
+                        ) : (
+                          <FolderOpen />
+                        )}
                       </EmptyMedia>
-                      <EmptyTitle>No files yet</EmptyTitle>
-                      <EmptyDescription>
-                        Upload a file to store it in your drive.
-                      </EmptyDescription>
+                      <EmptyTitle>{copy.emptyTitle}</EmptyTitle>
+                      <EmptyDescription>{copy.emptyDescription}</EmptyDescription>
                     </EmptyHeader>
-                    <EmptyContent>
-                      <Button onClick={() => inputRef.current?.click()}>
-                        <Upload data-icon="inline-start" />
-                        Upload file
-                      </Button>
-                    </EmptyContent>
+                    {activeView === "my-drive" && (
+                      <EmptyContent>
+                        <Button onClick={() => inputRef.current?.click()}>
+                          <Upload data-icon="inline-start" />
+                          Upload file
+                        </Button>
+                      </EmptyContent>
+                    )}
                   </Empty>
                 ) : (
                   <div className="flex flex-col gap-2">
-                    {completedFiles.map((file) => (
+                    {visibleFiles.map((file) => (
                       <div
                         key={file.id}
                         className="border-border flex items-center gap-3 rounded-lg border p-3"
@@ -336,23 +689,75 @@ export function DriveShell() {
                           </div>
                           <div className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-1 text-xs">
                             <span>{formatBytes(file.size_bytes)}</span>
-                            <span>Created {formatDate(file.created_at)}</span>
+                            {isSharedFile(file) ? (
+                              <span>
+                                Owner {file.owner.display_name} ({file.owner.email})
+                              </span>
+                            ) : activeView === "trash" ? (
+                              <span>Deleted {formatDate(file.deleted_at)}</span>
+                            ) : (
+                              <span>Created {formatDate(file.created_at)}</span>
+                            )}
                             <span>Completed {formatDate(file.completed_at)}</span>
                           </div>
                         </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => void handleDownload(file.id)}
-                          disabled={downloadId === file.id}
-                        >
-                          {downloadId === file.id ? (
-                            <Spinner data-icon="inline-start" />
-                          ) : (
-                            <Download data-icon="inline-start" />
+                        <div className="flex shrink-0 flex-wrap justify-end gap-2">
+                          {activeView !== "trash" && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => void handleDownload(file.id)}
+                              disabled={downloadId === file.id}
+                            >
+                              {downloadId === file.id ? (
+                                <Spinner data-icon="inline-start" />
+                              ) : (
+                                <Download data-icon="inline-start" />
+                              )}
+                              Download
+                            </Button>
                           )}
-                          Download
-                        </Button>
+                          {activeView === "my-drive" && (
+                            <>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setShareFile(file)}
+                              >
+                                <Share2 data-icon="inline-start" />
+                                Share
+                              </Button>
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                onClick={() => void handleDelete(file.id)}
+                                disabled={deleteId === file.id}
+                              >
+                                {deleteId === file.id ? (
+                                  <Spinner data-icon="inline-start" />
+                                ) : (
+                                  <Trash2 data-icon="inline-start" />
+                                )}
+                                Delete
+                              </Button>
+                            </>
+                          )}
+                          {activeView === "trash" && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => void handleRestore(file.id)}
+                              disabled={restoreId === file.id}
+                            >
+                              {restoreId === file.id ? (
+                                <Spinner data-icon="inline-start" />
+                              ) : (
+                                <RotateCcw data-icon="inline-start" />
+                              )}
+                              Restore
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -360,6 +765,17 @@ export function DriveShell() {
               </CardContent>
             </Card>
           </main>
+
+          <ShareDialog
+            file={shareFile}
+            token={token}
+            open={Boolean(shareFile)}
+            onOpenChange={(open) => {
+              if (!open) {
+                setShareFile(null)
+              }
+            }}
+          />
         </SidebarInset>
       </CommandMenuProvider>
     </SidebarProvider>

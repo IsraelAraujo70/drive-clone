@@ -18,13 +18,21 @@ import {
 import { useAuth } from "@/lib/auth"
 import { formatBytes } from "@/lib/format"
 
+export type DriveView = "my-drive" | "shared-with-me" | "trash"
+
 const sections = [
-  { title: "My Drive", icon: HardDrive, active: true },
-  { title: "Shared", icon: Share2, active: false },
-  { title: "Trash", icon: Trash2, active: false },
+  { id: "my-drive" as const, title: "My Drive", icon: HardDrive },
+  { id: "shared-with-me" as const, title: "Shared with me", icon: Share2 },
+  { id: "trash" as const, title: "Trash", icon: Trash2 },
 ]
 
-export function AppSidebar() {
+export function AppSidebar({
+  activeView,
+  onViewChange,
+}: {
+  activeView: DriveView
+  onViewChange: (view: DriveView) => void
+}) {
   const { user } = useAuth()
   const { openMenu } = useCommandMenu()
 
@@ -53,7 +61,11 @@ export function AppSidebar() {
             </SidebarMenuItem>
             {sections.map((section) => (
               <SidebarMenuItem key={section.title}>
-                <SidebarMenuButton tooltip={section.title} isActive={section.active}>
+                <SidebarMenuButton
+                  tooltip={section.title}
+                  isActive={section.id === activeView}
+                  onClick={() => onViewChange(section.id)}
+                >
                   <section.icon />
                   <span>{section.title}</span>
                 </SidebarMenuButton>

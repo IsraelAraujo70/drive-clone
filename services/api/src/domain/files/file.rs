@@ -36,6 +36,7 @@ pub struct DriveFile {
     pub state: FileState,
     pub created_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
+    pub deleted_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,4 +45,24 @@ pub struct PendingFile {
     pub size_bytes: i64,
     pub object_key: String,
     pub state: FileState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileUser {
+    pub id: Uuid,
+    pub email: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct FileShare {
+    pub file_id: Uuid,
+    pub grantee: FileUser,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SharedFile {
+    pub file: DriveFile,
+    pub owner: FileUser,
 }

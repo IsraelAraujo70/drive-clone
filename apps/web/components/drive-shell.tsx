@@ -112,6 +112,7 @@ import {
   type ServerPendingUpload,
 } from "@/lib/resumableUploads"
 import { getApiErrorMessage, getShareErrorMessage } from "@/lib/shareErrors"
+import { trashPolicyCopy } from "@/lib/trashPolicy"
 import { getUploadErrorMessage } from "@/lib/uploadErrors"
 
 function HeaderSearch() {
@@ -187,11 +188,11 @@ const viewCopy: Record<
   },
   trash: {
     title: "Trash",
-    description: "Deleted files you can restore.",
+    description: trashPolicyCopy.description,
     cardDescription: "Deleted files",
     cardTitle: "Trash",
     emptyTitle: "Trash is empty",
-    emptyDescription: "Deleted files will appear here until they are restored.",
+    emptyDescription: trashPolicyCopy.emptyDescription,
   },
 }
 

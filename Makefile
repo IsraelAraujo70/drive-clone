@@ -1,6 +1,6 @@
 COMPOSE ?= docker compose
 
-.PHONY: help dev watch up down restart logs ps test test-api test-web eval-upload eval-resumable clean
+.PHONY: help dev watch up down restart logs ps test test-api test-web eval-upload eval-resumable eval-resume-ui clean
 
 help:
 	@printf '%s\n' \
@@ -15,6 +15,7 @@ help:
 		'  make test         Run API and web gate tests inside containers' \
 		'  make eval-upload  Run the MinIO upload smoke eval against a running stack' \
 		'  make eval-resumable Run the MinIO resumable upload smoke eval against a running stack' \
+		'  make eval-resume-ui Run the resumable resume prompt UI smoke against a running stack' \
 		'  make clean        Stop containers and remove local volumes'
 
 dev:
@@ -49,6 +50,9 @@ eval-upload: up
 
 eval-resumable: up
 	bash docs/evals/resumable-upload-smoke.sh
+
+eval-resume-ui: up
+	bash docs/evals/resumable-resume-ui-smoke.sh
 
 clean:
 	$(COMPOSE) down --volumes --remove-orphans

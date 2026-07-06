@@ -95,58 +95,16 @@ import {
 import { useAuth } from "@/lib/auth"
 import { formatBytes } from "@/lib/format"
 import { useModifierSymbol } from "@/lib/platform"
+import {
+  fileMatchesStoredUpload,
+  forgetUpload,
+  pendingStoredUploads,
+  readStoredUploads,
+  rememberUpload,
+  resumableUploadKey,
+  type PendingResumableUpload,
+} from "@/lib/resumableUploads"
 import { getApiErrorMessage, getShareErrorMessage } from "@/lib/shareErrors"
-
-const RESUMABLE_UPLOADS_KEY = "drive_clone_resumable_uploads_v1"
-
-type StoredResumableUpload = {
-  file_id: string
-  filename: string
-  size_bytes: number
-  last_modified: number
-  content_type: string
-  parent_folder_id: string | null
-  expires_at: string
-}
-
-function resumableUploadKey(file: File, parentFolderId: string | null) {
-  return [
-    file.name,
-    file.size,
-    file.lastModified,
-    file.type || "application/octet-stream",
-    parentFolderId ?? "root",
-  ].join(":")
-}
-
-function readStoredUploads(): Record<string, StoredResumableUpload> {
-  if (typeof window === "undefined") {
-    return {}
-  }
-  try {
-    return JSON.parse(
-      window.localStorage.getItem(RESUMABLE_UPLOADS_KEY) ?? "{}"
-    )
-  } catch {
-    return {}
-  }
-}
-
-function writeStoredUploads(uploads: Record<string, StoredResumableUpload>) {
-  window.localStorage.setItem(RESUMABLE_UPLOADS_KEY, JSON.stringify(uploads))
-}
-
-function rememberUpload(key: string, upload: StoredResumableUpload) {
-  const uploads = readStoredUploads()
-  uploads[key] = upload
-  writeStoredUploads(uploads)
-}
-
-function forgetUpload(key: string) {
-  const uploads = readStoredUploads()
-  delete uploads[key]
-  writeStoredUploads(uploads)
-}
 
 function HeaderSearch() {
   const { openMenu } = useCommandMenu()
@@ -665,6 +623,7 @@ export function DriveShell() {
   const { user, token, logout, refreshUser } = useAuth()
   const router = useRouter()
   const inputRef = useRef<HTMLInputElement>(null)
+  const resumeInputRef = useRef<HTMLInputElement>(null)
   const [activeView, setActiveView] = useState<DriveView>("my-drive")
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null)
   const [breadcrumbs, setBreadcrumbs] = useState<FolderPathEntry[]>([])
@@ -677,6 +636,11 @@ export function DriveShell() {
   const [loadingFiles, setLoadingFiles] = useState(true)
   const [uploadingName, setUploadingName] = useState<string | null>(null)
   const [uploadProgress, setUploadProgress] = useState(0)
+  const [pendingUploads, setPendingUploads] = useState<
+    PendingResumableUpload[]
+  >([])
+  const [resumeTarget, setResumeTarget] =
+    useState<PendingResumableUpload | null>(null)
   const [downloadId, setDownloadId] = useState<string | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [restoreId, setRestoreId] = useState<string | null>(null)
@@ -723,6 +687,10 @@ export function DriveShell() {
 
   const copy = viewCopy[activeView]
 
+  const refreshPendingUploads = useCallback(() => {
+    setPendingUploads(pendingStoredUploads())
+  }, [])
+
   const loadActiveView = useCallback(async () => {
     if (!token) {
       setLoadingFiles(false)
@@ -762,6 +730,13 @@ export function DriveShell() {
     }
   }, [loadActiveView])
 
+  useEffect(() => {
+    const timer = window.setTimeout(refreshPendingUploads, 0)
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [refreshPendingUploads])
+
   if (!user) {
     return null // RequireAuth guarantees a user; this satisfies the type checker
   }
@@ -777,7 +752,10 @@ export function DriveShell() {
     setCurrentFolderId(null)
   }
 
-  async function handleUpload(file: File) {
+  async function handleUpload(
+    file: File,
+    options: { parentFolderId?: string | null } = {}
+  ) {
     if (!token) {
       setError("Your session expired. Log in again to upload files.")
       return
@@ -789,7 +767,7 @@ export function DriveShell() {
     setUploadProgress(0)
 
     try {
-      const parentFolderId = currentFolderId
+      const parentFolderId = options.parentFolderId ?? currentFolderId
       const contentType = file.type || "application/octet-stream"
       const storageKey = resumableUploadKey(file, parentFolderId)
       const stored = readStoredUploads()[storageKey]
@@ -813,10 +791,12 @@ export function DriveShell() {
             )
           } else {
             forgetUpload(storageKey)
+            refreshPendingUploads()
             fileId = undefined
           }
         } catch {
           forgetUpload(storageKey)
+          refreshPendingUploads()
           fileId = undefined
         }
       }
@@ -840,6 +820,7 @@ export function DriveShell() {
           parent_folder_id: parentFolderId,
           expires_at: created.expires_at,
         })
+        refreshPendingUploads()
       }
 
       let uploadedBytes = Array.from(confirmedParts.values()).reduce(
@@ -871,6 +852,7 @@ export function DriveShell() {
 
       await api.finalizeResumableUpload(token, fileId)
       forgetUpload(storageKey)
+      refreshPendingUploads()
       await refreshUser()
       const response = await api.browseDrive(token, currentFolderId)
       setFolders(response.folders)
@@ -884,7 +866,41 @@ export function DriveShell() {
       if (inputRef.current) {
         inputRef.current.value = ""
       }
+      if (resumeInputRef.current) {
+        resumeInputRef.current.value = ""
+      }
+      setResumeTarget(null)
     }
+  }
+
+  function handleResumeUpload(pending: PendingResumableUpload) {
+    setError(null)
+    setResumeTarget(pending)
+    window.setTimeout(() => resumeInputRef.current?.click(), 0)
+  }
+
+  function handleResumeFileSelected(file: File) {
+    if (!resumeTarget) {
+      return
+    }
+    if (!fileMatchesStoredUpload(file, resumeTarget)) {
+      setError(
+        `Select the same file again to resume ${resumeTarget.upload.filename}.`
+      )
+      setResumeTarget(null)
+      if (resumeInputRef.current) {
+        resumeInputRef.current.value = ""
+      }
+      return
+    }
+    void handleUpload(file, {
+      parentFolderId: resumeTarget.upload.parent_folder_id,
+    })
+  }
+
+  function handleDismissPendingUpload(pending: PendingResumableUpload) {
+    forgetUpload(pending.key)
+    refreshPendingUploads()
   }
 
   async function handleDownload(fileId: string) {
@@ -1129,6 +1145,17 @@ export function DriveShell() {
                 }
               }}
             />
+            <input
+              ref={resumeInputRef}
+              type="file"
+              className="sr-only"
+              onChange={(event) => {
+                const file = event.target.files?.[0]
+                if (file) {
+                  handleResumeFileSelected(file)
+                }
+              }}
+            />
 
             {error && (
               <Alert variant="destructive">
@@ -1152,6 +1179,59 @@ export function DriveShell() {
                     value={uploadProgress}
                     aria-label="Upload progress"
                   />
+                </CardContent>
+              </Card>
+            )}
+
+            {pendingUploads.length > 0 && !uploadingName && (
+              <Card size="sm">
+                <CardHeader>
+                  <CardDescription>Interrupted uploads</CardDescription>
+                  <CardTitle>
+                    {pendingUploads.length === 1
+                      ? "1 upload can resume"
+                      : `${pendingUploads.length} uploads can resume`}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-3">
+                  <p className="text-sm text-muted-foreground">
+                    Select the same local file again to continue from the parts
+                    already saved.
+                  </p>
+                  <div className="flex flex-col gap-2">
+                    {pendingUploads.map((pending) => (
+                      <div
+                        key={pending.key}
+                        className="flex flex-col gap-3 rounded-lg border border-border p-3 sm:flex-row sm:items-center"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-medium">
+                            {pending.upload.filename}
+                          </div>
+                          <div className="text-sm text-muted-foreground">
+                            {formatBytes(pending.upload.size_bytes)} expires{" "}
+                            {formatDate(pending.upload.expires_at)}
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => handleDismissPendingUpload(pending)}
+                          >
+                            Dismiss
+                          </Button>
+                          <Button
+                            type="button"
+                            onClick={() => handleResumeUpload(pending)}
+                          >
+                            <Upload data-icon="inline-start" />
+                            Resume
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </CardContent>
               </Card>
             )}

@@ -55,6 +55,19 @@ first part, verifies the status endpoint reports that confirmed part, uploads th
 remaining part, finalizes the multipart object, requests a download URL, and
 byte-compares the downloaded object.
 
+## Resumable Resume UI Smoke
+
+Run after the API and web app are serving:
+
+```bash
+bash docs/evals/resumable-resume-ui-smoke.sh
+```
+
+The script creates a real resumable upload session through the API, seeds the
+browser auth token plus pending upload record in `localStorage`, opens `/drive`,
+and verifies the UI tells the user that one upload can resume by selecting the
+same local file again.
+
 ## Share + Soft Delete Smoke
 
 Runs against any live API (local stack or production):

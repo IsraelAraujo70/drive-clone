@@ -1,0 +1,27 @@
+meta {
+  name: List Files
+  type: http
+  seq: 4
+}
+get {
+  url: {{baseUrl}}/files
+  body: none
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([200, 401]).to.include(res.status);
+  });
+}
+
+docs {
+  Returns completed active files owned by the authenticated user, newest first.
+}

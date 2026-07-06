@@ -1,0 +1,40 @@
+meta {
+  name: Create Share
+  type: http
+  seq: 1
+}
+post {
+  url: {{baseUrl}}/files/{{fileId}}/shares
+  body: json
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+  Content-Type: application/json
+}
+
+body:json {
+{
+  "email": "{{granteeEmail}}"
+}
+}
+
+script:post-response {
+if (res.body && res.body.grantee && res.body.grantee.id) {
+  bru.setEnvVar('granteeId', res.body.grantee.id);
+}
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([201, 401, 404, 422]).to.include(res.status);
+  });
+}
+
+docs {
+  Owner-only grant by registered user email. Self-share returns validation_error; unknown email returns user_not_found; duplicate share is idempotent.
+}

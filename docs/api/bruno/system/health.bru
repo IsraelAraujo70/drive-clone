@@ -1,0 +1,23 @@
+meta {
+  name: Health
+  type: http
+  seq: 2
+}
+get {
+  url: {{baseUrl}}/health
+  body: none
+  auth: none
+}
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([200, 503]).to.include(res.status);
+  });
+}
+
+docs {
+  Checks database reachability. Healthy responses return status ok and service drive-clone-api.
+}

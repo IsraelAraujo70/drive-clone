@@ -1,0 +1,27 @@
+meta {
+  name: Download File
+  type: http
+  seq: 5
+}
+get {
+  url: {{baseUrl}}/files/{{fileId}}/download
+  body: none
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([200, 401, 404, 502]).to.include(res.status);
+  });
+}
+
+docs {
+  Returns a short-lived presigned GET URL when the user owns the active complete file or has a current share grant.
+}

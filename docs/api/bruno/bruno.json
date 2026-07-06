@@ -1,0 +1,9 @@
+{
+  "version": "1",
+  "name": "Drive Clone API",
+  "type": "collection",
+  "ignore": [
+    "node_modules",
+    ".git"
+  ]
+}

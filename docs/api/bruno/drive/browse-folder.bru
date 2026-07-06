@@ -1,0 +1,31 @@
+meta {
+  name: Browse Folder
+  type: http
+  seq: 2
+}
+get {
+  url: {{baseUrl}}/drive
+  body: none
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+query {
+  parent_folder_id: {{folderId}}
+}
+
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([200, 401, 404]).to.include(res.status);
+  });
+}
+
+docs {
+  Browses an active folder owned by the authenticated user. Private or missing folders return file_not_found.
+}

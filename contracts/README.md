@@ -8,3 +8,6 @@ Current contracts:
 
 - [Auth](./auth.md)
 - [Files](./files.md)
+
+The full endpoint reference and Bruno collection are documented in
+[docs/api](../docs/api/README.md).

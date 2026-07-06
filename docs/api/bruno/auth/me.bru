@@ -1,0 +1,27 @@
+meta {
+  name: Me
+  type: http
+  seq: 3
+}
+get {
+  url: {{baseUrl}}/auth/me
+  body: none
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([200, 401]).to.include(res.status);
+  });
+}
+
+docs {
+  Returns the current authenticated user. Tokens are opaque and stored server-side as SHA-256 hashes.
+}

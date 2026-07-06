@@ -1,0 +1,27 @@
+meta {
+  name: Delete Folder
+  type: http
+  seq: 4
+}
+delete {
+  url: {{baseUrl}}/folders/{{folderId}}
+  body: none
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([204, 401, 404]).to.include(res.status);
+  });
+}
+
+docs {
+  Owner-only recursive soft delete for the folder tree and active descendant files.
+}

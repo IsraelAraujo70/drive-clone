@@ -1,0 +1,27 @@
+meta {
+  name: Complete Upload
+  type: http
+  seq: 3
+}
+post {
+  url: {{baseUrl}}/files/{{fileId}}/complete
+  body: none
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([200, 401, 404, 409, 502]).to.include(res.status);
+  });
+}
+
+docs {
+  Verifies the uploaded object size and atomically marks the pending file complete. Storage usage increments exactly once.
+}

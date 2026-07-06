@@ -1,0 +1,35 @@
+meta {
+  name: Update File
+  type: http
+  seq: 6
+}
+patch {
+  url: {{baseUrl}}/files/{{fileId}}
+  body: json
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+  Content-Type: application/json
+}
+
+body:json {
+{
+  "filename": "bruno-report-renamed.txt",
+  "parent_folder_id": null
+}
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([200, 401, 404, 422]).to.include(res.status);
+  });
+}
+
+docs {
+  Owner-only rename and/or move for complete active files. Use parent_folder_id null to move to root.
+}

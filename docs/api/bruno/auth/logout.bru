@@ -1,0 +1,27 @@
+meta {
+  name: Logout
+  type: http
+  seq: 4
+}
+post {
+  url: {{baseUrl}}/auth/logout
+  body: none
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([204, 401]).to.include(res.status);
+  });
+}
+
+docs {
+  Deletes the current server-side session. The current bearer token stops working immediately.
+}

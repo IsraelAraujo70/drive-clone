@@ -158,3 +158,80 @@ The challenge is successful when:
 - The app is deployed or has a clear deploy path.
 - The README explains the architecture well enough for another engineer to review it.
 - The tests and evals provide evidence that the most important behaviors work.
+
+## Current Implementation Status
+
+Last updated: 2026-07-06.
+
+Overall status: the web-drive MVP is implemented and locally verified. The
+remaining work is no longer core CRUD/upload behavior; it is final product
+completion around sync-client scope, folder sharing scope, production redeploy
+and QA, and demo polish.
+
+Status legend:
+
+- Done: implemented, documented, and covered by automated tests or smoke evals.
+- Partial: implemented enough for the portfolio MVP, but not the full long-term
+  product behavior described in the challenge.
+- Remaining: not implemented or not verified in the latest pushed state.
+
+### Requirement Status
+
+| Area | Status | Evidence | Remaining work |
+| --- | --- | --- | --- |
+| Authentication | Done | `POST /auth/signup`, `POST /auth/login`, `GET /auth/me`; API contract tests. | None for MVP. |
+| File upload | Done | Resumable multipart upload is the primary UI path; direct upload remains for compatibility; API contract tests and `docs/evals/minio-upload-smoke.sh`. | Production smoke after the latest commits. |
+| Upload progress | Done | Web upload progress and part progress in `apps/web/components/drive-shell.tsx`; web tests and resumable UI smoke. | Polish only. |
+| Upload limits and quota | Done | `MAX_FILE_SIZE_BYTES=52428800`, `storage_quota_bytes=52428800`; quota tests and signup contract assertion. | Production migration/deploy verification after the latest quota change. |
+| File download | Done | Authorized signed downloads for owner and grantee; byte-compare evals. | None for MVP. |
+| Unauthorized access prevention | Done | Contract tests cover private file denial, cross-user access denial, deleted-file denial, share revocation, and public-link failure modes. | None for MVP. |
+| File metadata | Done | PostgreSQL `files` and `folders` store name, owner, size, type, object key, state, timestamps, parent folder, delete state, and upload parts. | None for MVP. |
+| Folder management | Done | Create, browse, rename, move, recursive trash, restore, invalid cycle rejection; `folder-organization-smoke.sh`. | None for MVP. |
+| Trash restore | Done | File and folder restore from trash in API and UI. | None for MVP. |
+| Force delete from trash | Done | UI `Force delete`; `DELETE /files/{file_id}/purge`; `DELETE /folders/{folder_id}/purge`; tests and real local smoke. | Production smoke after deploy. |
+| User-to-user file sharing | Done | Owner shares by registered email, grantee sees shared-with-me and can download, owner can revoke. | None for MVP. |
+| Public share links | Done | Create/list/revoke/resolve public links with expiry and uniform 404 on invalid/revoked/expired/trashed targets; `share-link-smoke.sh`. | None for MVP. |
+| Folder sharing | Partial | Folder deletion/restore affects shared descendant file access correctly. | Directly sharing whole folders is not implemented. Decide whether the portfolio needs folder-level grants or whether file-level sharing is enough. |
+| Search | Done | Filename search, ACL scoped, deleted excluded by default, owner's trash included only with `include_deleted=true`; `search-smoke.sh`. | None for MVP. |
+| Sync change feed | Done for contract/API | `GET /sync/changes` emits upserts and tombstones with stable cursor and pagination; `sync-changes-smoke.sh`. | No desktop or CLI sync client yet. Conflict handling is specified at a high level, not implemented in a real client. |
+| Resumable uploads | Done | Create session, upload parts, status endpoint, finalized multipart object, abandoned upload expiry, local resume UI using the same selected file; resumable tests and smoke evals. | Production resume smoke after latest deploy. |
+| Cleanup jobs | Done | Worker handles expired resumable uploads, trash purge, orphan cleanup, and quota reconciliation; `worker-jobs-smoke.sh`. | Operational monitoring dashboards are not built. |
+| Observability | Partial | Health endpoint, structured logs, worker job completion logs, eval scripts. | No metrics dashboard, alerting, or tracing backend. |
+| Railway deployment | Partial | Railway-first config/docs exist and prior production upload/resume validation was performed. | Latest pushed changes still need Railway redeploy plus production smoke across upload, force delete, share, search, sync, and resume. |
+| API documentation | Done | `docs/api/README.md`, `contracts/files.md`, and Bruno collection under `docs/api/bruno`. | Keep generated Bruno collection refreshed after route changes. |
+| Database/schema documentation | Done | Migrations under `services/api/migrations`; architecture and API docs describe metadata model. | Optional ERD diagram. |
+| Automated tests | Done | Rust unit tests, HTTP contract tests with real Postgres, web Vitest tests, Playwright e2e for theme and force delete. | Keep adding tests with feature changes. |
+| Evals | Done | Product copy, upload, resumable upload, resume UI, share/delete, share link, folder organization, search, sync changes, worker jobs. | Run full eval suite against production after redeploy. |
+| Demo script | Partial | README has manual demo flow and eval commands. | Write a short final demo script or record a demo video. |
+
+### What Is Left To Finish
+
+1. Redeploy the latest `main` to Railway and run production smoke tests.
+   Required coverage: signup/login, resumable upload, resume UI, download,
+   folder organization, trash restore, force delete, user sharing, public share
+   link, search, sync changes, and worker jobs where production-safe.
+
+2. Decide folder sharing scope.
+   The current product shares files, not whole folders. If the challenge is read
+   strictly as "files or folders", folder sharing should be added. If the
+   portfolio story accepts file sharing plus public links, document that as the
+   explicit v1 sharing mode.
+
+3. Decide sync-client scope.
+   The server-side sync feed is implemented and testable. A real desktop or CLI
+   sync client is not built. The challenge allows exposing the sync contract
+   first, so this is optional for MVP but the biggest remaining product gap.
+
+4. Improve production observability.
+   Add metrics/alerts or at least documented Railway log queries for upload
+   errors, storage errors, worker failures, quota divergences, and share-link
+   resolve failures.
+
+5. Finalize demo material.
+   Create a short demo script or video outline that follows the real happy path:
+   create account, upload/resume, organize, share, search, delete, restore, force
+   delete, and inspect sync changes.
+
+6. Run the final acceptance pass.
+   Run `make test`, all relevant `docs/evals/*.sh`, and browser QA on the
+   deployed URL. Save the command outputs or screenshots as final evidence.

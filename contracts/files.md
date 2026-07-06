@@ -222,16 +222,8 @@ the final object, marks the file `complete`, and increments storage usage once.
 
 Response `200`: `FileResponse`.
 
-### POST /files/uploads/cleanup-expired
-
-Authenticated. Expires up to 100 stale pending resumable uploads and aborts
-their multipart uploads in object storage.
-
-Response `200`:
-
-```json
-{ "expired_count": 2, "aborted_count": 2 }
-```
+Expired resumable upload sessions are cleaned up by the background worker, not
+by a user-facing HTTP endpoint.
 
 ## POST /files/{file_id}/complete
 
@@ -459,7 +451,8 @@ Response: `204 No Content`.
 
 ### POST /files/{file_id}/restore
 
-Owner-only. File must be deleted, otherwise `file_not_found`. Clears `deleted_at`.
+Owner-only. File must be deleted and not already claimed by the background
+purge worker, otherwise `file_not_found`. Clears `deleted_at`.
 
 Response `200`: the full `FileResponse`.
 

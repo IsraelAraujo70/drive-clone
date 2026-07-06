@@ -33,13 +33,13 @@ Use a services-first architecture:
 
 - `apps/web`: TypeScript frontend.
 - `services/api`: Rust HTTP API.
-- `services/worker`: Rust background worker, added when cleanup and async jobs are needed.
+- `services/worker`: docs for the Rust background worker binary built by `services/api`.
 - `contracts`: shared API and schema documentation.
 - `docs`: architecture diagrams, deployment notes, and eval reports.
 
 The backend owns metadata, authorization, direct and resumable upload completion,
-quota enforcement, and future sync semantics. File bytes live in S3-compatible
-object storage. PostgreSQL stores durable metadata.
+quota enforcement, sync change logs, public share links, and cleanup jobs. File
+bytes live in S3-compatible object storage. PostgreSQL stores durable metadata.
 
 ## Repository Structure
 
@@ -61,8 +61,8 @@ services/
 
 Current deployable services:
 
-- `services/api`: Rust API with auth, direct upload/download, file sharing, trash, folders, rename, move, and filename search.
-- `apps/web`: Next.js app with auth, `/drive`, folder browsing, file actions, sharing, trash, and command-palette search.
+- `services/api`: Rust API and worker binaries with auth, direct/resumable upload, sharing, share links, sync, trash purge, folders, rename, move, and filename search.
+- `apps/web`: Next.js app with auth, `/drive`, folder browsing, file actions, sharing, share links, trash, resumable recovery, and command-palette search.
 
 API documentation and runnable Bruno requests live in [docs/api](./docs/api/README.md).
 
@@ -135,7 +135,7 @@ Infrastructure:
 - Railway frontend service.
 - Railway PostgreSQL.
 - Railway S3-compatible bucket for the first deployment.
-- Optional Railway Redis or worker service for background jobs.
+- Railway worker service for cleanup jobs.
 
 The storage interface must stay S3-compatible so the project can move from Railway buckets to another object storage provider later without changing the public API.
 
@@ -277,8 +277,8 @@ Recommended Railway resources:
 - Frontend service: TypeScript web app.
 - PostgreSQL service: metadata database.
 - Bucket: S3-compatible file storage.
-- Optional worker service: cleanup and async jobs.
-- Optional Redis service: queue or short-lived coordination.
+- Worker service: resumable upload expiry, trash purge, orphan cleanup, and quota reconciliation.
+- Optional Redis service: future queues or short-lived coordination.
 
 Required deployment behavior:
 
@@ -298,7 +298,7 @@ Initial deployment status:
 - Web service source: `IsraelAraujo70/drive-clone`, branch `google-drive-clone-challenge`, root `/apps/web`.
 - Latest verified API deployment: `86164b07-f605-4724-9efb-32e3464baf9c`.
 - Latest verified web deployment: `ef2f4843-f122-400b-92ff-ec0157329d67`.
-- Product resources for Postgres, buckets, and workers will be added as their implementation lands.
+- Product resources for Postgres, buckets, API, web, and worker are documented in `infra/railway`.
 
 ## Roadmap By Status
 
@@ -342,21 +342,23 @@ Delivered:
 - Part tracking.
 - Resume status endpoint.
 - Frontend resume behavior.
-- Expiration cleanup job.
+- Worker-owned expiration cleanup job.
 - Tests and evals for interrupted uploads.
 
 Done: selecting the same file again can resume from server-confirmed parts
 instead of restarting the full upload.
 
-### Future: Sync API and Rust Client
+### Implemented: Sync API, Share Links, and Worker Jobs
 
-Deliver:
+Delivered:
 
-- Change log table.
-- Cursor-based sync API.
-- Tombstone handling.
-- Conflict-copy behavior.
-- Rust CLI proof-of-concept sync client.
+- Per-owner `change_log` with gap-free cursors.
+- `GET /sync/changes` with upserts and tombstones.
+- Revocable public share links with hashed tokens.
+- Background worker for resumable expiry, trash purge, orphan cleanup, and quota reconciliation.
+
+Done: clients can page a deterministic change feed, share files by public link,
+and rely on worker jobs to keep cleanup and quota state correct.
 
 Done when the CLI can sync a local folder from remote changes and handle conflicts deterministically.
 
@@ -389,8 +391,7 @@ Required gate test coverage:
 - Direct upload completion idempotency and object length validation.
 - Upload session state transitions.
 - Part resume logic.
-- Future sync cursor ordering.
-- Future conflict behavior.
+- Sync cursor ordering.
 
 Integration tests should cover:
 
@@ -398,7 +399,7 @@ Integration tests should cover:
 - Resumable multipart upload against MinIO.
 - Download authorization plus object storage read.
 - Delete and restore lifecycle.
-- Expired upload cleanup.
+- Worker-owned expired upload cleanup, trash purge, orphan cleanup, and quota reconciliation.
 - Database migration correctness.
 - Railway-like environment configuration.
 
@@ -528,15 +529,20 @@ Implemented so far:
 - Landing page, signup, and login (English UI) with a protected `/drive` shell, built on Next.js + Tailwind CSS + shadcn/ui.
 - Rust API on Axum + SQLx + PostgreSQL: `POST /auth/signup`, `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, and a DB-aware `GET /health`.
 - File upload/download backend: direct upload compatibility plus resumable
-  multipart upload sessions, part signing, status, finalization, cleanup,
+  multipart upload sessions, part signing, status, finalization,
   `GET /files`, and `GET /files/{file_id}/download`.
 - Folder organization backend and UI: `POST /folders`, `GET /drive`, `GET /folders`, `PATCH /files/{file_id}`, `PATCH /folders/{folder_id}`, recursive folder trash/restore, and `/drive` folder browsing.
 - Soft delete/trash/restore for files and folders.
 - User-to-user file sharing by email, shared-with-me, and revoke.
+- Public revocable share links with uniform 404 for invalid, revoked, expired,
+  or trashed targets.
 - Filename search with owned/shared ACL scoping, trash excluded by default, PostgreSQL search indexes, command-palette UI, and search smoke eval.
+- Sync change feed with tombstones and pagination.
+- Worker binary for expired resumable uploads, trash purge with quota decrement,
+  orphan object cleanup, and quota reconciliation.
 - Argon2 password hashing; opaque bearer session tokens stored hashed (SHA-256) with 30-day expiry.
 - Auth contract in `contracts/auth.md`; files contract in `contracts/files.md`; migrations in `services/api/migrations`.
 - Gate tests: API validation/token tests plus full HTTP auth/file/folder/share/trash/resumable-upload flows against real Postgres, and web tests.
 - Repo-connected Railway deployments for the API and web services.
 
-Next milestone: share links, sync API, and a local Rust sync client are intentionally outside the current implementation cut.
+Next milestone: a local Rust sync client can consume the implemented sync API.

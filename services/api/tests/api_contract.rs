@@ -4,12 +4,27 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use drive_clone_api::adapters::object_storage::fake::FakeObjectStorage;
+use drive_clone_api::adapters::postgres::PostgresFileRepository;
+use drive_clone_api::application::files::{PurgeTrashUseCase, ReconcileQuotaUseCase};
+use drive_clone_api::application::ports::clock::Clock;
+use drive_clone_api::application::ports::files::FileRepository;
 use drive_clone_api::{AppState, app_with_state, app_with_storage};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
+
+#[derive(Debug)]
+struct TestClock {
+    now: chrono::DateTime<chrono::Utc>,
+}
+
+impl Clock for TestClock {
+    fn now(&self) -> chrono::DateTime<chrono::Utc> {
+        self.now
+    }
+}
 
 async fn request(
     app: Router,
@@ -1286,6 +1301,221 @@ async fn private_files_do_not_leak_to_other_users(pool: PgPool) {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(body["download_url"].as_str().unwrap().contains(object_key));
+}
+
+#[sqlx::test]
+async fn purge_trash_deletes_bucket_row_and_quota_but_keeps_sync_tombstone(pool: PgPool) {
+    let storage = Arc::new(FakeObjectStorage::default());
+    let app = app_with_storage(pool.clone(), storage.clone());
+    let token = signup(app.clone(), "purge-owner@example.com").await;
+    let (file_id, object_key) =
+        create_completed_file(app.clone(), storage.clone(), &token, 12).await;
+
+    let (status, _) = request(
+        app.clone(),
+        "DELETE",
+        &format!("/files/{file_id}"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let file_uuid = Uuid::parse_str(&file_id).unwrap();
+    let now = chrono::Utc::now();
+    sqlx::query("UPDATE files SET deleted_at = $1 WHERE id = $2")
+        .bind(now - chrono::Duration::days(31))
+        .bind(file_uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let repo = Arc::new(PostgresFileRepository::new(pool.clone()));
+    let output = PurgeTrashUseCase::new(repo, storage.clone(), Arc::new(TestClock { now }), 30)
+        .execute(100)
+        .await
+        .unwrap();
+    assert_eq!(output.purged_files, 1);
+    assert_eq!(output.failed_files, 0);
+    assert!(!storage.has_object(&object_key));
+
+    let file_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM files WHERE id = $1")
+        .bind(file_uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(file_count, 0);
+
+    let used: i64 = sqlx::query_scalar("SELECT storage_used_bytes FROM users WHERE email = $1")
+        .bind("purge-owner@example.com")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(used, 0);
+
+    let changes = sync_changes(app, &token, 0, None).await;
+    let delete_seen = changes["changes"].as_array().unwrap().iter().any(|change| {
+        change["entity_type"] == "file"
+            && change["op"] == "delete"
+            && change["entity_id"] == file_id
+    });
+    assert!(delete_seen, "{changes}");
+}
+
+#[sqlx::test]
+async fn purge_claim_blocks_duplicate_workers_and_restore_until_released(pool: PgPool) {
+    let storage = Arc::new(FakeObjectStorage::default());
+    let app = app_with_storage(pool.clone(), storage.clone());
+    let token = signup(app.clone(), "purge-claim@example.com").await;
+    let (file_id, _) = create_completed_file(app.clone(), storage, &token, 12).await;
+
+    let (status, _) = request(
+        app.clone(),
+        "DELETE",
+        &format!("/files/{file_id}"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let file_uuid = Uuid::parse_str(&file_id).unwrap();
+    let now = chrono::Utc::now();
+    let cutoff = now - chrono::Duration::days(30);
+    sqlx::query("UPDATE files SET deleted_at = $1 WHERE id = $2")
+        .bind(now - chrono::Duration::days(31))
+        .bind(file_uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let repo = PostgresFileRepository::new(pool.clone());
+    let first_claim = repo.list_purgeable_files(cutoff, 100).await.unwrap();
+    assert_eq!(first_claim.len(), 1);
+    assert_eq!(first_claim[0].file_id, file_uuid);
+
+    let second_claim = repo.list_purgeable_files(cutoff, 100).await.unwrap();
+    assert!(second_claim.is_empty());
+
+    let (status, body) = request(
+        app.clone(),
+        "POST",
+        &format!("/files/{file_id}/restore"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "file_not_found");
+
+    repo.release_purge_claim(file_uuid, first_claim[0].purge_claimed_at)
+        .await
+        .unwrap();
+    let (status, restored) = request(
+        app,
+        "POST",
+        &format!("/files/{file_id}/restore"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(restored["deleted_at"], Value::Null);
+}
+
+#[sqlx::test]
+async fn stale_purge_claim_cannot_release_or_purge_new_claim(pool: PgPool) {
+    let storage = Arc::new(FakeObjectStorage::default());
+    let app = app_with_storage(pool.clone(), storage.clone());
+    let token = signup(app.clone(), "stale-purge-claim@example.com").await;
+    let (file_id, _) = create_completed_file(app, storage, &token, 12).await;
+
+    let file_uuid = Uuid::parse_str(&file_id).unwrap();
+    let now = chrono::Utc::now();
+    let cutoff = now - chrono::Duration::days(30);
+    sqlx::query("UPDATE files SET deleted_at = $1 WHERE id = $2")
+        .bind(now - chrono::Duration::days(31))
+        .bind(file_uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let repo = PostgresFileRepository::new(pool.clone());
+    let first_claim = repo.list_purgeable_files(cutoff, 100).await.unwrap();
+    assert_eq!(first_claim.len(), 1);
+    let old_claimed_at = first_claim[0].purge_claimed_at;
+    let renewed_claimed_at = old_claimed_at + chrono::Duration::seconds(1);
+
+    sqlx::query("UPDATE files SET purge_claimed_at = $1 WHERE id = $2")
+        .bind(renewed_claimed_at)
+        .bind(file_uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    repo.release_purge_claim(file_uuid, old_claimed_at)
+        .await
+        .unwrap();
+    let still_claimed: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT purge_claimed_at FROM files WHERE id = $1")
+            .bind(file_uuid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(still_claimed, Some(renewed_claimed_at));
+
+    let stale_purge = repo
+        .purge_file(file_uuid, cutoff, old_claimed_at)
+        .await
+        .unwrap();
+    assert_eq!(stale_purge, None);
+    let file_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM files WHERE id = $1")
+        .bind(file_uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(file_count, 1);
+
+    repo.release_purge_claim(file_uuid, renewed_claimed_at)
+        .await
+        .unwrap();
+    let released: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT purge_claimed_at FROM files WHERE id = $1")
+            .bind(file_uuid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(released, None);
+}
+
+#[sqlx::test]
+async fn reconcile_quota_corrects_corrupted_storage_used_bytes(pool: PgPool) {
+    let storage = Arc::new(FakeObjectStorage::default());
+    let app = app_with_storage(pool.clone(), storage.clone());
+    let token = signup(app.clone(), "reconcile-owner@example.com").await;
+    create_completed_file(app, storage, &token, 12).await;
+
+    sqlx::query("UPDATE users SET storage_used_bytes = 999 WHERE email = $1")
+        .bind("reconcile-owner@example.com")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let repo = Arc::new(PostgresFileRepository::new(pool.clone()));
+    let output = ReconcileQuotaUseCase::new(repo, 500)
+        .execute()
+        .await
+        .unwrap();
+    assert_eq!(output.corrected(), 1);
+    assert_eq!(output.divergences[0].previous, 999);
+    assert_eq!(output.divergences[0].corrected, 12);
+
+    let used: i64 = sqlx::query_scalar("SELECT storage_used_bytes FROM users WHERE email = $1")
+        .bind("reconcile-owner@example.com")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(used, 12);
 }
 
 async fn sync_changes(app: Router, token: &str, cursor: i64, limit: Option<i64>) -> Value {

@@ -38,9 +38,18 @@ curl https://api-production-bcad4.up.railway.app/health
 curl -I https://web-production-c3311.up.railway.app/
 ```
 
+Worker deploy:
+
+- Service: `worker`
+- Source directory: `services/api`
+- Start command: `/usr/local/bin/drive-clone-worker`
+- Required env vars: same `DATABASE_URL` and S3 variables as `api`
+- Worker-only env vars: `TRASH_RETENTION_DAYS=30`,
+  `WORKER_INTERVAL_SECONDS=300`
+- No public domain or health endpoint is required. Use logs for `job complete`
+  and `job failed`.
+
 Future resources:
 
-- `web` service for the TypeScript frontend.
 - PostgreSQL for metadata.
 - S3-compatible bucket for file bytes.
-- Optional worker service for cleanup jobs.

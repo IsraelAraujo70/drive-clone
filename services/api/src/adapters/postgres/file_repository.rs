@@ -7,8 +7,9 @@ use crate::adapters::postgres::tx::map_sqlx_error;
 use crate::application::ports::RepositoryError;
 use crate::application::ports::files::{
     CreateFolderRecord, CreatePendingFileRecord, CreateResumableUploadRecord,
-    CreateShareLinkRecord, ExpiredUploadRecord, FileRepository, RecordUploadPartRecord,
-    SearchFilesRecord, UpdateFileRecord, UpdateFolderRecord,
+    CreateShareLinkRecord, ExpiredUploadRecord, FileRepository, PurgeableFile, PurgedFile,
+    QuotaDivergence, ReconcileQuotaBatch, RecordUploadPartRecord, SearchFilesRecord,
+    UpdateFileRecord, UpdateFolderRecord,
 };
 use crate::domain::files::{
     ChangeEntityType, ChangeLogEntry, ChangeOp, DriveBrowse, DriveFile, FileShare, FileState,
@@ -1242,6 +1243,7 @@ impl FileRepository for PostgresFileRepository {
                AND owner_id = $2
                AND deleted_at IS NOT NULL
                AND deleted_by_folder_id IS NULL
+               AND purge_claimed_at IS NULL
                AND (
                    parent_folder_id IS NULL
                    OR EXISTS (
@@ -1400,9 +1402,11 @@ impl FileRepository for PostgresFileRepository {
             "UPDATE files
              SET deleted_at = NULL,
                  deleted_by_folder_id = NULL,
+                 purge_claimed_at = NULL,
                  updated_at = now()
              WHERE owner_id = $1
                AND deleted_by_folder_id = $2
+               AND purge_claimed_at IS NULL
              RETURNING id",
         )
         .bind(owner_id)
@@ -1832,5 +1836,218 @@ impl FileRepository for PostgresFileRepository {
         .await
         .map(|row| row.map(Into::into))
         .map_err(map_sqlx_error)
+    }
+
+    async fn list_purgeable_files(
+        &self,
+        cutoff: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<PurgeableFile>, RepositoryError> {
+        let rows = sqlx::query_as::<_, (Uuid, String, DateTime<Utc>)>(
+            "UPDATE files
+             SET purge_claimed_at = now()
+             WHERE id IN (
+                SELECT id
+                FROM files
+                WHERE state = 'complete'
+                  AND deleted_at IS NOT NULL
+                  AND deleted_at < $1
+                  AND (
+                    purge_claimed_at IS NULL
+                    OR purge_claimed_at < now() - interval '15 minutes'
+                  )
+                ORDER BY deleted_at ASC, id ASC
+                LIMIT $2
+                FOR UPDATE SKIP LOCKED
+             )
+             RETURNING id, object_key, purge_claimed_at",
+        )
+        .bind(cutoff)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(file_id, object_key, purge_claimed_at)| PurgeableFile {
+                file_id,
+                object_key,
+                purge_claimed_at,
+            })
+            .collect())
+    }
+
+    async fn purge_file(
+        &self,
+        file_id: Uuid,
+        cutoff: DateTime<Utc>,
+        purge_claimed_at: DateTime<Utc>,
+    ) -> Result<Option<PurgedFile>, RepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let deleted: Option<(Uuid, i64)> = sqlx::query_as(
+            "DELETE FROM files
+             WHERE id = $1
+               AND state = 'complete'
+               AND deleted_at IS NOT NULL
+               AND deleted_at < $2
+               AND purge_claimed_at = $3
+             RETURNING owner_id, size_bytes",
+        )
+        .bind(file_id)
+        .bind(cutoff)
+        .bind(purge_claimed_at)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        let Some((owner_id, size_bytes)) = deleted else {
+            tx.commit().await.map_err(map_sqlx_error)?;
+            return Ok(None);
+        };
+
+        sqlx::query(
+            "UPDATE users
+             SET storage_used_bytes = GREATEST(0, storage_used_bytes - $1)
+             WHERE id = $2",
+        )
+        .bind(size_bytes)
+        .bind(owner_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(Some(PurgedFile {
+            owner_id,
+            size_bytes,
+        }))
+    }
+
+    async fn release_purge_claim(
+        &self,
+        file_id: Uuid,
+        purge_claimed_at: DateTime<Utc>,
+    ) -> Result<(), RepositoryError> {
+        sqlx::query(
+            "UPDATE files
+             SET purge_claimed_at = NULL
+             WHERE id = $1
+               AND purge_claimed_at = $2",
+        )
+        .bind(file_id)
+        .bind(purge_claimed_at)
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        Ok(())
+    }
+
+    async fn purge_empty_trashed_folders(
+        &self,
+        cutoff: DateTime<Utc>,
+    ) -> Result<usize, RepositoryError> {
+        let mut removed = 0usize;
+        loop {
+            let count = sqlx::query(
+                "DELETE FROM folders parent
+                 WHERE parent.deleted_at IS NOT NULL
+                   AND parent.deleted_at < $1
+                   AND NOT EXISTS (
+                       SELECT 1 FROM folders child
+                       WHERE child.parent_folder_id = parent.id
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1 FROM files file
+                       WHERE file.parent_folder_id = parent.id
+                   )",
+            )
+            .bind(cutoff)
+            .execute(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?
+            .rows_affected();
+
+            if count == 0 {
+                break;
+            }
+            removed += count as usize;
+        }
+        Ok(removed)
+    }
+
+    async fn all_object_keys(&self) -> Result<std::collections::HashSet<String>, RepositoryError> {
+        let rows: Vec<(String,)> = sqlx::query_as("SELECT object_key FROM files")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        Ok(rows.into_iter().map(|(key,)| key).collect())
+    }
+
+    async fn reconcile_quota(
+        &self,
+        after_id: Option<Uuid>,
+        limit: i64,
+    ) -> Result<ReconcileQuotaBatch, RepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let batch: Vec<(Uuid,)> = sqlx::query_as(
+            "SELECT id FROM users
+             WHERE ($1::uuid IS NULL OR id > $1)
+             ORDER BY id ASC
+             LIMIT $2",
+        )
+        .bind(after_id)
+        .bind(limit)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        let last_user_id = batch.last().map(|(id,)| *id);
+        let ids = batch.into_iter().map(|(id,)| id).collect::<Vec<_>>();
+        if ids.is_empty() {
+            tx.commit().await.map_err(map_sqlx_error)?;
+            return Ok(ReconcileQuotaBatch {
+                divergences: Vec::new(),
+                last_user_id: None,
+            });
+        }
+
+        let diverged: Vec<(Uuid, i64, i64)> = sqlx::query_as(
+            "UPDATE users u
+             SET storage_used_bytes = sub.corrected
+             FROM (
+                 SELECT u2.id,
+                        u2.storage_used_bytes AS previous,
+                        COALESCE((
+                            SELECT SUM(f.size_bytes)
+                            FROM files f
+                            WHERE f.owner_id = u2.id
+                              AND f.state = 'complete'
+                        ), 0)::BIGINT AS corrected
+                 FROM users u2
+                 WHERE u2.id = ANY($1)
+             ) sub
+             WHERE u.id = sub.id
+               AND u.storage_used_bytes <> sub.corrected
+             RETURNING u.id, sub.previous, sub.corrected",
+        )
+        .bind(&ids)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        tx.commit().await.map_err(map_sqlx_error)?;
+
+        Ok(ReconcileQuotaBatch {
+            divergences: diverged
+                .into_iter()
+                .map(|(owner_id, previous, corrected)| QuotaDivergence {
+                    owner_id,
+                    previous,
+                    corrected,
+                })
+                .collect(),
+            last_user_id,
+        })
     }
 }

@@ -1,29 +1,68 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use url::Url;
 
 use crate::application::ports::StorageError;
 use crate::application::ports::object_storage::{
-    CompletedUploadPart, ObjectMetadata, ObjectStorage, PresignedUrl,
+    CompletedUploadPart, ObjectMetadata, ObjectStorage, PresignedUrl, StoredObject,
 };
 
 #[derive(Debug, Clone, Default)]
 pub struct FakeObjectStorage {
-    objects: Arc<Mutex<HashMap<String, ObjectMetadata>>>,
+    objects: Arc<Mutex<HashMap<String, StoredObject>>>,
     multipart_uploads: Arc<Mutex<HashMap<String, String>>>,
     completed_multipart: Arc<Mutex<Vec<(String, String, Vec<CompletedUploadPart>)>>>,
     aborted_multipart: Arc<Mutex<Vec<(String, String)>>>,
+    delete_failures: Arc<Mutex<HashSet<String>>>,
+    deleted_objects: Arc<Mutex<Vec<String>>>,
 }
 
 impl FakeObjectStorage {
     pub fn put_object(&self, object_key: &str, content_length: i64) {
+        self.put_object_with_last_modified(object_key, content_length, Utc::now());
+    }
+
+    pub fn put_object_with_last_modified(
+        &self,
+        object_key: &str,
+        content_length: i64,
+        last_modified: DateTime<Utc>,
+    ) {
         self.objects
             .lock()
             .expect("fake storage mutex poisoned")
-            .insert(object_key.to_string(), ObjectMetadata { content_length });
+            .insert(
+                object_key.to_string(),
+                StoredObject {
+                    key: object_key.to_string(),
+                    last_modified,
+                    size_bytes: content_length,
+                },
+            );
+    }
+
+    pub fn fail_delete(&self, object_key: &str) {
+        self.delete_failures
+            .lock()
+            .expect("fake storage mutex poisoned")
+            .insert(object_key.to_string());
+    }
+
+    pub fn has_object(&self, object_key: &str) -> bool {
+        self.objects
+            .lock()
+            .expect("fake storage mutex poisoned")
+            .contains_key(object_key)
+    }
+
+    pub fn deleted_objects(&self) -> Vec<String> {
+        self.deleted_objects
+            .lock()
+            .expect("fake storage mutex poisoned")
+            .clone()
     }
 
     pub fn multipart_completions(&self) -> Vec<(String, String, Vec<CompletedUploadPart>)> {
@@ -59,8 +98,10 @@ impl ObjectStorage for FakeObjectStorage {
             .lock()
             .expect("fake storage mutex poisoned")
             .get(object_key)
-            .cloned()
-            .ok_or(StorageError::Unexpected)
+            .map(|object| ObjectMetadata {
+                content_length: object.size_bytes,
+            })
+            .ok_or(StorageError::NotFound)
     }
 
     async fn create_multipart_upload(
@@ -119,6 +160,46 @@ impl ObjectStorage for FakeObjectStorage {
             .expect("fake storage mutex poisoned")
             .push((object_key.to_string(), upload_id.to_string()));
         Ok(())
+    }
+
+    async fn delete_object(&self, object_key: &str) -> Result<(), StorageError> {
+        if self
+            .delete_failures
+            .lock()
+            .expect("fake storage mutex poisoned")
+            .contains(object_key)
+        {
+            return Err(StorageError::Unexpected);
+        }
+
+        self.deleted_objects
+            .lock()
+            .expect("fake storage mutex poisoned")
+            .push(object_key.to_string());
+
+        if self
+            .objects
+            .lock()
+            .expect("fake storage mutex poisoned")
+            .remove(object_key)
+            .is_some()
+        {
+            Ok(())
+        } else {
+            Err(StorageError::NotFound)
+        }
+    }
+
+    async fn list_objects(&self) -> Result<Vec<StoredObject>, StorageError> {
+        let mut objects = self
+            .objects
+            .lock()
+            .expect("fake storage mutex poisoned")
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        objects.sort_by(|a, b| a.key.cmp(&b.key));
+        Ok(objects)
     }
 }
 

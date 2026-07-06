@@ -2,7 +2,7 @@ use async_trait::async_trait;
 
 use crate::application::ports::StorageError;
 use crate::application::ports::object_storage::{
-    CompletedUploadPart, ObjectMetadata, ObjectStorage, PresignedUrl,
+    CompletedUploadPart, ObjectMetadata, ObjectStorage, PresignedUrl, StoredObject,
 };
 
 #[derive(Debug, Default)]
@@ -64,6 +64,14 @@ impl ObjectStorage for DisabledObjectStorage {
         _object_key: &str,
         _upload_id: &str,
     ) -> Result<(), StorageError> {
+        Err(StorageError::Unexpected)
+    }
+
+    async fn delete_object(&self, _object_key: &str) -> Result<(), StorageError> {
+        Err(StorageError::Unexpected)
+    }
+
+    async fn list_objects(&self) -> Result<Vec<StoredObject>, StorageError> {
         Err(StorageError::Unexpected)
     }
 }

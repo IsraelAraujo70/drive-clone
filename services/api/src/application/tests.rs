@@ -11,25 +11,26 @@ use crate::application::auth::login::{LoginInput, LoginUseCase};
 use crate::application::auth::logout::LogoutUseCase;
 use crate::application::auth::signup::{SignupInput, SignupUseCase};
 use crate::application::files::{
-    BrowseFolderUseCase, CompleteUploadUseCase, CreateFolderInput, CreateFolderUseCase,
-    CreateResumableUploadUseCase, CreateShareLinkInput, CreateShareLinkUseCase,
-    CreateUploadUseCase, DeleteFileUseCase, DeleteFolderUseCase, DownloadFileUseCase,
-    FinalizeResumableUploadUseCase, GetUploadStatusUseCase, ListDriveTrashUseCase,
-    ListFilesUseCase, ListFoldersUseCase, ListPendingUploadsUseCase, ListShareLinksUseCase,
-    ListSharedWithMeUseCase, ListSharesUseCase, ListTrashUseCase, MIN_RESUMABLE_PART_SIZE_BYTES,
-    PresignUploadPartInput, PresignUploadPartUseCase, RecordUploadPartInput,
-    RecordUploadPartUseCase, ResolveShareLinkUseCase, RestoreFileUseCase, RestoreFolderUseCase,
-    RevokeShareLinkUseCase, RevokeShareUseCase, SearchFilesInput, SearchFilesUseCase,
-    ShareFileInput, ShareFileUseCase, UpdateFileInput, UpdateFileUseCase, UpdateFolderInput,
-    UpdateFolderUseCase,
+    BrowseFolderUseCase, CleanupOrphanObjectsUseCase, CompleteUploadUseCase, CreateFolderInput,
+    CreateFolderUseCase, CreateResumableUploadUseCase, CreateShareLinkInput,
+    CreateShareLinkUseCase, CreateUploadUseCase, DeleteFileUseCase, DeleteFolderUseCase,
+    DownloadFileUseCase, FinalizeResumableUploadUseCase, GetUploadStatusUseCase,
+    ListDriveTrashUseCase, ListFilesUseCase, ListFoldersUseCase, ListPendingUploadsUseCase,
+    ListShareLinksUseCase, ListSharedWithMeUseCase, ListSharesUseCase, ListTrashUseCase,
+    MIN_RESUMABLE_PART_SIZE_BYTES, PresignUploadPartInput, PresignUploadPartUseCase,
+    PurgeTrashUseCase, ReconcileQuotaUseCase, RecordUploadPartInput, RecordUploadPartUseCase,
+    ResolveShareLinkUseCase, RestoreFileUseCase, RestoreFolderUseCase, RevokeShareLinkUseCase,
+    RevokeShareUseCase, SearchFilesInput, SearchFilesUseCase, ShareFileInput, ShareFileUseCase,
+    UpdateFileInput, UpdateFileUseCase, UpdateFolderInput, UpdateFolderUseCase,
 };
 use crate::application::ports::RepositoryError;
 use crate::application::ports::auth::{AuthRepository, CreateUserRecord};
 use crate::application::ports::clock::{Clock, FixedClock};
 use crate::application::ports::files::{
     CreateFolderRecord, CreatePendingFileRecord, CreateResumableUploadRecord,
-    CreateShareLinkRecord, ExpiredUploadRecord, FileRepository, RecordUploadPartRecord,
-    SearchFilesRecord, UpdateFileRecord, UpdateFolderRecord,
+    CreateShareLinkRecord, ExpiredUploadRecord, FileRepository, PurgeableFile, PurgedFile,
+    QuotaDivergence, ReconcileQuotaBatch, RecordUploadPartRecord, SearchFilesRecord,
+    UpdateFileRecord, UpdateFolderRecord,
 };
 use crate::application::ports::id_generator::SequenceIdGenerator;
 use crate::domain::auth::{User, UserWithPassword, hash_password, hash_token};
@@ -185,12 +186,14 @@ struct FakeFileRepository {
     resumable: Mutex<HashMap<Uuid, ResumableUploadSession>>,
     upload_parts: Mutex<HashMap<(Uuid, i32), UploadPart>>,
     completed: Mutex<HashMap<Uuid, DriveFile>>,
+    purge_claims: Mutex<HashMap<Uuid, DateTime<Utc>>>,
     owners: Mutex<HashMap<Uuid, Uuid>>,
     folders: Mutex<HashMap<Uuid, Folder>>,
     folder_owners: Mutex<HashMap<Uuid, Uuid>>,
     users: Mutex<HashMap<Uuid, FileUser>>,
     shares: Mutex<HashMap<(Uuid, Uuid), DateTime<Utc>>>,
     share_links: Mutex<HashMap<Uuid, (Uuid, Vec<u8>, ShareLink)>>,
+    storage_used: Mutex<HashMap<Uuid, i64>>,
     completed_count: Mutex<usize>,
     next_folder_id: Mutex<Option<Uuid>>,
 }
@@ -210,7 +213,28 @@ impl FakeFileRepository {
     fn insert_completed(&self, owner: &User, file: DriveFile) {
         self.insert_user(owner);
         self.owners.lock().unwrap().insert(file.id, owner.id);
+        if file.state == FileState::Complete {
+            *self
+                .storage_used
+                .lock()
+                .unwrap()
+                .entry(owner.id)
+                .or_default() += file.size_bytes;
+        }
         self.completed.lock().unwrap().insert(file.id, file);
+    }
+
+    fn set_storage_used(&self, owner_id: Uuid, used: i64) {
+        self.storage_used.lock().unwrap().insert(owner_id, used);
+    }
+
+    fn storage_used(&self, owner_id: Uuid) -> i64 {
+        self.storage_used
+            .lock()
+            .unwrap()
+            .get(&owner_id)
+            .copied()
+            .unwrap_or_default()
     }
 
     fn insert_folder(&self, owner: &User, folder: Folder) {
@@ -750,6 +774,9 @@ impl FileRepository for FakeFileRepository {
         if self.owners.lock().unwrap().get(&file_id).copied() != Some(owner_id) {
             return Err(RepositoryError::NotFound);
         }
+        if self.purge_claims.lock().unwrap().contains_key(&file_id) {
+            return Err(RepositoryError::NotFound);
+        }
         let mut completed = self.completed.lock().unwrap();
         let file = completed
             .get_mut(&file_id)
@@ -855,8 +882,11 @@ impl FileRepository for FakeFileRepository {
         }
 
         let mut completed = self.completed.lock().unwrap();
+        let claims = self.purge_claims.lock().unwrap();
         for file in completed.values_mut() {
-            if file.parent_folder_id.is_some_and(|id| tree.contains(&id)) {
+            if file.parent_folder_id.is_some_and(|id| tree.contains(&id))
+                && !claims.contains_key(&file.id)
+            {
                 file.deleted_at = None;
                 file.updated_at = fixed_now();
             }
@@ -1082,6 +1112,180 @@ impl FileRepository for FakeFileRepository {
         _limit: i64,
     ) -> Result<Vec<ChangeLogEntry>, RepositoryError> {
         Ok(Vec::new())
+    }
+
+    async fn list_purgeable_files(
+        &self,
+        cutoff: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<PurgeableFile>, RepositoryError> {
+        let claims = self.purge_claims.lock().unwrap();
+        let mut files = self
+            .completed
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|file| {
+                file.deleted_at
+                    .is_some_and(|deleted_at| deleted_at < cutoff)
+            })
+            .filter(|file| !claims.contains_key(&file.id))
+            .map(|file| PurgeableFile {
+                file_id: file.id,
+                object_key: file.object_key.clone(),
+                purge_claimed_at: fixed_now(),
+            })
+            .collect::<Vec<_>>();
+        drop(claims);
+
+        files.sort_by_key(|file| file.file_id);
+        files.truncate(limit as usize);
+        let mut claims = self.purge_claims.lock().unwrap();
+        for file in &files {
+            claims.insert(file.file_id, file.purge_claimed_at);
+        }
+        Ok(files)
+    }
+
+    async fn purge_file(
+        &self,
+        file_id: Uuid,
+        cutoff: DateTime<Utc>,
+        purge_claimed_at: DateTime<Utc>,
+    ) -> Result<Option<PurgedFile>, RepositoryError> {
+        let should_purge = self
+            .completed
+            .lock()
+            .unwrap()
+            .get(&file_id)
+            .is_some_and(|file| {
+                file.deleted_at
+                    .is_some_and(|deleted_at| deleted_at < cutoff)
+            });
+        if !should_purge
+            || self.purge_claims.lock().unwrap().get(&file_id).copied() != Some(purge_claimed_at)
+        {
+            return Ok(None);
+        }
+
+        let Some(file) = self.completed.lock().unwrap().remove(&file_id) else {
+            return Ok(None);
+        };
+        let Some(owner_id) = self.owners.lock().unwrap().remove(&file_id) else {
+            return Ok(None);
+        };
+        self.purge_claims.lock().unwrap().remove(&file_id);
+        let mut storage_used = self.storage_used.lock().unwrap();
+        let current = storage_used.get(&owner_id).copied().unwrap_or_default();
+        storage_used.insert(owner_id, (current - file.size_bytes).max(0));
+        Ok(Some(PurgedFile {
+            owner_id,
+            size_bytes: file.size_bytes,
+        }))
+    }
+
+    async fn release_purge_claim(
+        &self,
+        file_id: Uuid,
+        purge_claimed_at: DateTime<Utc>,
+    ) -> Result<(), RepositoryError> {
+        let mut claims = self.purge_claims.lock().unwrap();
+        if claims.get(&file_id).copied() == Some(purge_claimed_at) {
+            claims.remove(&file_id);
+        }
+        Ok(())
+    }
+
+    async fn purge_empty_trashed_folders(
+        &self,
+        cutoff: DateTime<Utc>,
+    ) -> Result<usize, RepositoryError> {
+        let mut removed = 0usize;
+        loop {
+            let folders = self.folders.lock().unwrap();
+            let completed = self.completed.lock().unwrap();
+            let removable = folders
+                .values()
+                .find(|folder| {
+                    folder
+                        .deleted_at
+                        .is_some_and(|deleted_at| deleted_at < cutoff)
+                        && !folders
+                            .values()
+                            .any(|child| child.parent_folder_id == Some(folder.id))
+                        && !completed
+                            .values()
+                            .any(|file| file.parent_folder_id == Some(folder.id))
+                })
+                .map(|folder| folder.id);
+            drop(completed);
+            drop(folders);
+
+            let Some(folder_id) = removable else {
+                break;
+            };
+            self.folders.lock().unwrap().remove(&folder_id);
+            self.folder_owners.lock().unwrap().remove(&folder_id);
+            removed += 1;
+        }
+        Ok(removed)
+    }
+
+    async fn all_object_keys(&self) -> Result<std::collections::HashSet<String>, RepositoryError> {
+        Ok(self
+            .completed
+            .lock()
+            .unwrap()
+            .values()
+            .map(|file| file.object_key.clone())
+            .collect())
+    }
+
+    async fn reconcile_quota(
+        &self,
+        after_id: Option<Uuid>,
+        limit: i64,
+    ) -> Result<ReconcileQuotaBatch, RepositoryError> {
+        let mut ids = self
+            .users
+            .lock()
+            .unwrap()
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids.retain(|id| after_id.is_none_or(|after_id| *id > after_id));
+        ids.truncate(limit as usize);
+
+        let last_user_id = ids.last().copied();
+        let mut divergences = Vec::new();
+        let owners = self.owners.lock().unwrap();
+        let completed = self.completed.lock().unwrap();
+        let mut storage_used = self.storage_used.lock().unwrap();
+        for owner_id in ids {
+            let corrected = completed
+                .iter()
+                .filter(|(file_id, file)| {
+                    owners.get(file_id).copied() == Some(owner_id)
+                        && file.state == FileState::Complete
+                })
+                .map(|(_, file)| file.size_bytes)
+                .sum::<i64>();
+            let previous = storage_used.get(&owner_id).copied().unwrap_or_default();
+            if previous != corrected {
+                storage_used.insert(owner_id, corrected);
+                divergences.push(QuotaDivergence {
+                    owner_id,
+                    previous,
+                    corrected,
+                });
+            }
+        }
+
+        Ok(ReconcileQuotaBatch {
+            divergences,
+            last_user_id,
+        })
     }
 
     async fn create_share_link(
@@ -2014,6 +2218,205 @@ async fn shared_grantee_can_download_until_share_is_revoked_or_file_deleted() {
             .unwrap_err(),
         AppError::Domain(DomainError::FileNotFound)
     );
+}
+
+#[tokio::test]
+async fn purge_trash_deletes_object_row_and_decrements_quota() {
+    let repo = Arc::new(FakeFileRepository::default());
+    let storage = Arc::new(FakeObjectStorage::default());
+    let owner = user(
+        Uuid::parse_str("11111111-2222-4333-8444-555555555555").unwrap(),
+        "owner@example.com",
+        0,
+        100,
+    );
+    let file_id = Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap();
+    let mut file = completed_file(file_id, "owner/purge");
+    file.deleted_at = Some(fixed_now() - chrono::Duration::days(31));
+    repo.insert_completed(&owner, file);
+    storage.put_object("owner/purge", 12);
+
+    let output = PurgeTrashUseCase::new(
+        repo.clone(),
+        storage.clone(),
+        Arc::new(FixedClock::new(fixed_now())),
+        30,
+    )
+    .execute(100)
+    .await
+    .unwrap();
+
+    assert_eq!(output.purged_files, 1);
+    assert_eq!(output.failed_files, 0);
+    assert!(!repo.completed.lock().unwrap().contains_key(&file_id));
+    assert!(!storage.has_object("owner/purge"));
+    assert_eq!(repo.storage_used(owner.id), 0);
+}
+
+#[tokio::test]
+async fn purge_trash_keeps_row_when_bucket_delete_fails() {
+    let repo = Arc::new(FakeFileRepository::default());
+    let storage = Arc::new(FakeObjectStorage::default());
+    let owner = user(
+        Uuid::parse_str("33333333-2222-4333-8444-555555555555").unwrap(),
+        "owner@example.com",
+        0,
+        100,
+    );
+    let file_id = Uuid::parse_str("33333333-3333-4333-8333-333333333333").unwrap();
+    let mut file = completed_file(file_id, "owner/fails");
+    file.deleted_at = Some(fixed_now() - chrono::Duration::days(31));
+    repo.insert_completed(&owner, file);
+    storage.put_object("owner/fails", 12);
+    storage.fail_delete("owner/fails");
+
+    let output = PurgeTrashUseCase::new(
+        repo.clone(),
+        storage.clone(),
+        Arc::new(FixedClock::new(fixed_now())),
+        30,
+    )
+    .execute(100)
+    .await
+    .unwrap();
+
+    assert_eq!(output.purged_files, 0);
+    assert_eq!(output.failed_files, 1);
+    assert!(repo.completed.lock().unwrap().contains_key(&file_id));
+    assert!(storage.has_object("owner/fails"));
+    assert_eq!(repo.storage_used(owner.id), 12);
+}
+
+#[tokio::test]
+async fn purge_trash_treats_missing_bucket_object_as_success() {
+    let repo = Arc::new(FakeFileRepository::default());
+    let storage = Arc::new(FakeObjectStorage::default());
+    let owner = user(
+        Uuid::parse_str("44444444-2222-4333-8444-555555555555").unwrap(),
+        "owner@example.com",
+        0,
+        100,
+    );
+    let file_id = Uuid::parse_str("44444444-4444-4444-8444-444444444444").unwrap();
+    let mut file = completed_file(file_id, "owner/missing");
+    file.deleted_at = Some(fixed_now() - chrono::Duration::days(31));
+    repo.insert_completed(&owner, file);
+
+    let output = PurgeTrashUseCase::new(
+        repo.clone(),
+        storage.clone(),
+        Arc::new(FixedClock::new(fixed_now())),
+        30,
+    )
+    .execute(100)
+    .await
+    .unwrap();
+
+    assert_eq!(output.purged_files, 1);
+    assert!(!repo.completed.lock().unwrap().contains_key(&file_id));
+    assert_eq!(repo.storage_used(owner.id), 0);
+}
+
+#[tokio::test]
+async fn purge_trash_preserves_recent_trash() {
+    let repo = Arc::new(FakeFileRepository::default());
+    let storage = Arc::new(FakeObjectStorage::default());
+    let owner = user(
+        Uuid::parse_str("55555555-2222-4333-8444-555555555555").unwrap(),
+        "owner@example.com",
+        0,
+        100,
+    );
+    let file_id = Uuid::parse_str("55555555-5555-4555-8555-555555555555").unwrap();
+    let mut file = completed_file(file_id, "owner/recent");
+    file.deleted_at = Some(fixed_now() - chrono::Duration::days(29));
+    repo.insert_completed(&owner, file);
+    storage.put_object("owner/recent", 12);
+
+    let output = PurgeTrashUseCase::new(
+        repo.clone(),
+        storage.clone(),
+        Arc::new(FixedClock::new(fixed_now())),
+        30,
+    )
+    .execute(100)
+    .await
+    .unwrap();
+
+    assert_eq!(output.purged_files, 0);
+    assert!(repo.completed.lock().unwrap().contains_key(&file_id));
+    assert!(storage.has_object("owner/recent"));
+}
+
+#[tokio::test]
+async fn cleanup_orphans_deletes_only_old_objects_without_file_rows() {
+    let repo = Arc::new(FakeFileRepository::default());
+    let storage = Arc::new(FakeObjectStorage::default());
+    let owner = user(
+        Uuid::parse_str("66666666-2222-4333-8444-555555555555").unwrap(),
+        "owner@example.com",
+        0,
+        100,
+    );
+    let known_id = Uuid::parse_str("66666666-6666-4666-8666-666666666666").unwrap();
+    repo.insert_completed(&owner, completed_file(known_id, "owner/known"));
+    storage.put_object_with_last_modified(
+        "owner/known",
+        12,
+        fixed_now() - chrono::Duration::days(2),
+    );
+    storage.put_object_with_last_modified(
+        "owner/orphan-old",
+        12,
+        fixed_now() - chrono::Duration::days(2),
+    );
+    storage.put_object_with_last_modified(
+        "owner/orphan-new",
+        12,
+        fixed_now() - chrono::Duration::hours(1),
+    );
+
+    let output = CleanupOrphanObjectsUseCase::new(
+        repo,
+        storage.clone(),
+        Arc::new(FixedClock::new(fixed_now())),
+        24 * 60 * 60,
+    )
+    .execute()
+    .await
+    .unwrap();
+
+    assert_eq!(output.scanned, 3);
+    assert_eq!(output.deleted, 1);
+    assert_eq!(output.failed, 0);
+    assert!(storage.has_object("owner/known"));
+    assert!(!storage.has_object("owner/orphan-old"));
+    assert!(storage.has_object("owner/orphan-new"));
+}
+
+#[tokio::test]
+async fn reconcile_quota_corrects_storage_used_from_complete_files() {
+    let repo = Arc::new(FakeFileRepository::default());
+    let owner = user(
+        Uuid::parse_str("77777777-2222-4333-8444-555555555555").unwrap(),
+        "owner@example.com",
+        0,
+        100,
+    );
+    let file_id = Uuid::parse_str("77777777-7777-4777-8777-777777777777").unwrap();
+    repo.insert_completed(&owner, completed_file(file_id, "owner/quota"));
+    repo.set_storage_used(owner.id, 999);
+
+    let output = ReconcileQuotaUseCase::new(repo.clone(), 500)
+        .execute()
+        .await
+        .unwrap();
+
+    assert_eq!(output.corrected(), 1);
+    assert_eq!(output.divergences[0].owner_id, owner.id);
+    assert_eq!(output.divergences[0].previous, 999);
+    assert_eq!(output.divergences[0].corrected, 12);
+    assert_eq!(repo.storage_used(owner.id), 12);
 }
 
 #[tokio::test]

@@ -650,15 +650,8 @@ Responses:
 - `409 invalid_file_state`
 - `502 storage_error`
 
-### `POST /files/uploads/cleanup-expired`
-
-Authenticated. Expires and aborts up to 100 stale pending resumable uploads.
-
-Response `200`:
-
-```json
-{ "expired_count": 2, "aborted_count": 2 }
-```
+Expired resumable upload sessions are cleaned up by the background worker. There
+is no user-facing endpoint for global upload cleanup.
 
 ### `GET /files`
 

@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::application::ports::RepositoryError;
@@ -55,6 +56,32 @@ pub struct ExpiredUploadRecord {
     pub file_id: Uuid,
     pub object_key: String,
     pub multipart_upload_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PurgeableFile {
+    pub file_id: Uuid,
+    pub object_key: String,
+    pub purge_claimed_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PurgedFile {
+    pub owner_id: Uuid,
+    pub size_bytes: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuotaDivergence {
+    pub owner_id: Uuid,
+    pub previous: i64,
+    pub corrected: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReconcileQuotaBatch {
+    pub divergences: Vec<QuotaDivergence>,
+    pub last_user_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone)]
@@ -132,9 +159,41 @@ pub trait FileRepository: Send + Sync {
 
     async fn expire_resumable_uploads(
         &self,
-        now: chrono::DateTime<chrono::Utc>,
+        now: DateTime<Utc>,
         limit: i64,
     ) -> Result<Vec<ExpiredUploadRecord>, RepositoryError>;
+
+    async fn list_purgeable_files(
+        &self,
+        cutoff: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<PurgeableFile>, RepositoryError>;
+
+    async fn purge_file(
+        &self,
+        file_id: Uuid,
+        cutoff: DateTime<Utc>,
+        purge_claimed_at: DateTime<Utc>,
+    ) -> Result<Option<PurgedFile>, RepositoryError>;
+
+    async fn release_purge_claim(
+        &self,
+        file_id: Uuid,
+        purge_claimed_at: DateTime<Utc>,
+    ) -> Result<(), RepositoryError>;
+
+    async fn purge_empty_trashed_folders(
+        &self,
+        cutoff: DateTime<Utc>,
+    ) -> Result<usize, RepositoryError>;
+
+    async fn all_object_keys(&self) -> Result<std::collections::HashSet<String>, RepositoryError>;
+
+    async fn reconcile_quota(
+        &self,
+        after_id: Option<Uuid>,
+        limit: i64,
+    ) -> Result<ReconcileQuotaBatch, RepositoryError>;
 
     async fn create_folder(&self, input: CreateFolderRecord) -> Result<Folder, RepositoryError>;
 

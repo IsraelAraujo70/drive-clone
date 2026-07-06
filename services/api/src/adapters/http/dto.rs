@@ -6,9 +6,9 @@ use uuid::Uuid;
 use crate::application::auth::signup::AuthResponse as UseCaseAuthResponse;
 use crate::application::files::{
     CreateFolderInput, CreateResumableUploadOutput, CreateShareLinkInput, CreateShareLinkOutput,
-    CreateUploadOutput, DownloadFileOutput, ExpireUploadsOutput, PresignUploadPartInput,
-    PresignUploadPartOutput, RecordUploadPartInput, ResolveShareLinkOutput, SearchFilesInput,
-    ShareFileInput, SyncChangesInput, SyncChangesOutput, UpdateFileInput, UpdateFolderInput,
+    CreateUploadOutput, DownloadFileOutput, PresignUploadPartInput, PresignUploadPartOutput,
+    RecordUploadPartInput, ResolveShareLinkOutput, SearchFilesInput, ShareFileInput,
+    SyncChangesInput, SyncChangesOutput, UpdateFileInput, UpdateFolderInput,
 };
 use crate::domain::auth::User;
 use crate::domain::files::{
@@ -271,21 +271,6 @@ impl RecordUploadPartRequest {
             part_number,
             size_bytes: self.size_bytes,
             etag: self.etag,
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-pub struct ExpireUploadsResponse {
-    expired_count: usize,
-    aborted_count: usize,
-}
-
-impl From<ExpireUploadsOutput> for ExpireUploadsResponse {
-    fn from(output: ExpireUploadsOutput) -> Self {
-        Self {
-            expired_count: output.expired_count,
-            aborted_count: output.aborted_count,
         }
     }
 }

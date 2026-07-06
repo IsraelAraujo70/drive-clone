@@ -1,14 +1,14 @@
 use std::env;
 
 use async_trait::async_trait;
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use url::Url;
 
 use crate::application::ports::StorageError;
 use crate::application::ports::object_storage::{
-    CompletedUploadPart, ObjectMetadata, ObjectStorage, PresignedUrl,
+    CompletedUploadPart, ObjectMetadata, ObjectStorage, PresignedUrl, StoredObject,
 };
 
 #[derive(Debug, Clone)]
@@ -53,20 +53,25 @@ impl S3ObjectStorage {
         let mut url = base.clone();
         match self.url_style {
             S3UrlStyle::Path => {
-                url.path_segments_mut()
-                    .map_err(|_| StorageError::Unexpected)?
-                    .clear()
-                    .push(&self.bucket)
-                    .extend(object_key.split('/'));
+                let mut segments = url
+                    .path_segments_mut()
+                    .map_err(|_| StorageError::Unexpected)?;
+                segments.clear().push(&self.bucket);
+                for segment in object_key.split('/').filter(|segment| !segment.is_empty()) {
+                    segments.push(segment);
+                }
             }
             S3UrlStyle::VirtualHost => {
                 let host = url.host_str().ok_or(StorageError::Unexpected)?;
                 url.set_host(Some(&format!("{}.{}", self.bucket, host)))
                     .map_err(|_| StorageError::Unexpected)?;
-                url.path_segments_mut()
-                    .map_err(|_| StorageError::Unexpected)?
-                    .clear()
-                    .extend(object_key.split('/'));
+                let mut segments = url
+                    .path_segments_mut()
+                    .map_err(|_| StorageError::Unexpected)?;
+                segments.clear();
+                for segment in object_key.split('/').filter(|segment| !segment.is_empty()) {
+                    segments.push(segment);
+                }
             }
         }
         Ok(url)
@@ -292,6 +297,86 @@ impl ObjectStorage for S3ObjectStorage {
             Err(StorageError::Unexpected)
         }
     }
+
+    async fn delete_object(&self, object_key: &str) -> Result<(), StorageError> {
+        let response = self
+            .signed_request("DELETE", object_key, &[], None, None)
+            .await?;
+        let status = response.status();
+        if status.is_success() {
+            Ok(())
+        } else if status == reqwest::StatusCode::NOT_FOUND {
+            Err(StorageError::NotFound)
+        } else {
+            Err(StorageError::Unexpected)
+        }
+    }
+
+    async fn list_objects(&self) -> Result<Vec<StoredObject>, StorageError> {
+        let mut objects = Vec::new();
+        let mut continuation_token: Option<String> = None;
+        loop {
+            let mut query = vec![("list-type", "2".to_string())];
+            if let Some(token) = &continuation_token {
+                query.push(("continuation-token", token.clone()));
+            }
+
+            let response = self.signed_request("GET", "", &query, None, None).await?;
+            if !response.status().is_success() {
+                return Err(StorageError::Unexpected);
+            }
+            let body = response
+                .text()
+                .await
+                .map_err(|_| StorageError::Unexpected)?;
+            let (mut page, next) = parse_list_objects_v2(&body)?;
+            objects.append(&mut page);
+            match next {
+                Some(token) => continuation_token = Some(token),
+                None => break,
+            }
+        }
+        Ok(objects)
+    }
+}
+
+fn parse_list_objects_v2(xml: &str) -> Result<(Vec<StoredObject>, Option<String>), StorageError> {
+    let mut objects = Vec::new();
+    let mut rest = xml;
+    while let Some(open) = rest.find("<Contents>") {
+        let after_open = &rest[open + "<Contents>".len()..];
+        let close = after_open
+            .find("</Contents>")
+            .ok_or(StorageError::Unexpected)?;
+        let entry = &after_open[..close];
+        let key = extract_xml_text(entry, "Key").ok_or(StorageError::Unexpected)?;
+        let last_modified_raw =
+            extract_xml_text(entry, "LastModified").ok_or(StorageError::Unexpected)?;
+        let size_raw = extract_xml_text(entry, "Size").ok_or(StorageError::Unexpected)?;
+        let last_modified = DateTime::parse_from_rfc3339(&last_modified_raw)
+            .map_err(|_| StorageError::Unexpected)?
+            .with_timezone(&Utc);
+        let size_bytes = size_raw
+            .trim()
+            .parse::<i64>()
+            .map_err(|_| StorageError::Unexpected)?;
+        objects.push(StoredObject {
+            key,
+            last_modified,
+            size_bytes,
+        });
+        rest = &after_open[close + "</Contents>".len()..];
+    }
+
+    let is_truncated = extract_xml_text(xml, "IsTruncated")
+        .map(|value| value.trim().eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let next_token = if is_truncated {
+        extract_xml_text(xml, "NextContinuationToken")
+    } else {
+        None
+    };
+    Ok((objects, next_token))
 }
 
 fn extract_xml_text(xml: &str, tag: &str) -> Option<String> {
@@ -473,5 +558,78 @@ mod tests {
         let metadata =
             parse_head_response(b"HTTP/1.1 200 OK\r\ncontent-length: 42\r\n\r\n").unwrap();
         assert_eq!(metadata.content_length, 42);
+    }
+
+    #[test]
+    fn bucket_root_urls_do_not_add_empty_object_segments() {
+        let path_url = storage(S3UrlStyle::Path)
+            .object_url(&Url::parse("https://storage.example").unwrap(), "")
+            .unwrap();
+        assert_eq!(path_url.as_str(), "https://storage.example/bucket-name");
+
+        let virtual_host_url = storage(S3UrlStyle::VirtualHost)
+            .object_url(&Url::parse("https://storage.example").unwrap(), "")
+            .unwrap();
+        assert_eq!(
+            virtual_host_url.as_str(),
+            "https://bucket-name.storage.example/"
+        );
+    }
+
+    #[test]
+    fn parse_list_objects_reads_keys_sizes_and_timestamps() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <ListBucketResult>
+            <IsTruncated>false</IsTruncated>
+            <Contents>
+                <Key>owner-a/object-1</Key>
+                <LastModified>2026-01-02T03:04:05.000Z</LastModified>
+                <Size>128</Size>
+            </Contents>
+            <Contents>
+                <Key>owner-b/object-2</Key>
+                <LastModified>2026-01-02T03:04:06.000Z</LastModified>
+                <Size>256</Size>
+            </Contents>
+        </ListBucketResult>"#;
+
+        let (objects, next) = parse_list_objects_v2(xml).unwrap();
+        assert_eq!(next, None);
+        assert_eq!(objects.len(), 2);
+        assert_eq!(objects[0].key, "owner-a/object-1");
+        assert_eq!(objects[0].size_bytes, 128);
+        assert_eq!(
+            objects[0].last_modified,
+            DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
+                .unwrap()
+                .with_timezone(&Utc)
+        );
+        assert_eq!(objects[1].key, "owner-b/object-2");
+        assert_eq!(objects[1].size_bytes, 256);
+    }
+
+    #[test]
+    fn parse_list_objects_surfaces_continuation_token_when_truncated() {
+        let xml = r#"<ListBucketResult>
+            <IsTruncated>true</IsTruncated>
+            <NextContinuationToken>page-2-token</NextContinuationToken>
+            <Contents>
+                <Key>owner-a/object-1</Key>
+                <LastModified>2026-01-02T03:04:05Z</LastModified>
+                <Size>10</Size>
+            </Contents>
+        </ListBucketResult>"#;
+
+        let (objects, next) = parse_list_objects_v2(xml).unwrap();
+        assert_eq!(objects.len(), 1);
+        assert_eq!(next, Some("page-2-token".to_string()));
+    }
+
+    #[test]
+    fn parse_list_objects_handles_empty_bucket() {
+        let xml = r#"<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>"#;
+        let (objects, next) = parse_list_objects_v2(xml).unwrap();
+        assert!(objects.is_empty());
+        assert_eq!(next, None);
     }
 }

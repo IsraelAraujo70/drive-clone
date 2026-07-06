@@ -28,6 +28,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/drive-clone-api /usr/local/bin/drive-clone-api
+COPY --from=builder /app/target/release/drive-clone-worker /usr/local/bin/drive-clone-worker
 
 ENV HOST=0.0.0.0
 ENV PORT=8080

@@ -2,6 +2,15 @@
 name = "drive-clone-api"
 version = "0.1.0"
 edition = "2024"
+default-run = "drive-clone-api"
+
+[[bin]]
+name = "drive-clone-api"
+path = "src/bin/api.rs"
+
+[[bin]]
+name = "drive-clone-worker"
+path = "src/bin/worker.rs"
 
 [dependencies]
 async-trait = "0.1"

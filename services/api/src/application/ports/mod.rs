@@ -14,5 +14,6 @@ pub enum RepositoryError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageError {
+    NotFound,
     Unexpected,
 }

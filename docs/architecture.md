@@ -60,7 +60,8 @@ Adapters implement application ports or translate external input/output into app
 - builds the router with CORS and tracing
 - starts the Axum server
 
-`main.rs` only calls `drive_clone_api::bootstrap::server::run().await`.
+`src/bin/api.rs` and `src/bin/worker.rs` are thin entrypoints that call the
+server and worker bootstrap modules.
 
 ## Dependency Rule
 
@@ -104,10 +105,35 @@ Resumable multipart flow:
 6. `POST /files/uploads/{file_id}/finalize` verifies a complete ordered part set,
    completes the multipart upload in object storage, HEADs the final object,
    marks the file complete, and increments storage usage once.
-7. `POST /files/uploads/cleanup-expired` marks stale pending resumable uploads
+7. The `drive-clone-worker` process marks stale pending resumable uploads
    expired and aborts their multipart uploads.
 
 Only completed files become visible in drive browse/search/share/download flows.
+
+## Background Worker
+
+`services/api` builds two binaries from the same crate:
+
+- `drive-clone-api`: Axum HTTP server.
+- `drive-clone-worker`: background job loop.
+
+The worker runs SQLx migrations on startup, then repeats four jobs every
+`WORKER_INTERVAL_SECONDS` seconds:
+
+- expire abandoned resumable upload sessions and abort multipart uploads
+- purge trash older than `TRASH_RETENTION_DAYS`, deleting the object first and
+  decrementing quota only after the file row is removed; a `purge_claimed_at`
+  lease prevents duplicate workers and restore races during permanent deletion
+- delete old bucket objects that no longer have a `files.object_key` row
+- reconcile `users.storage_used_bytes` from complete files, including trashed
+  files until permanent purge
+
+Production checklist:
+
+- run the worker as a separate service using the same `services/api` source
+- set the same Postgres and S3 env vars as the API
+- set `TRASH_RETENTION_DAYS=30` unless product semantics change
+- watch logs for `job complete`, `job failed`, and quota divergence warnings
 
 ## Folder Tree Flow
 

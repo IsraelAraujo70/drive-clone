@@ -6,6 +6,8 @@ pub const DEFAULT_MAX_FILE_SIZE_BYTES: i64 = 15 * 1024 * 1024 * 1024;
 pub const DEFAULT_PRESIGNED_URL_TTL_SECONDS: i64 = 900;
 pub const DEFAULT_RESUMABLE_UPLOAD_TTL_SECONDS: i64 = 86_400;
 pub const DEFAULT_PUBLIC_WEB_URL: &str = "http://localhost:3000";
+pub const DEFAULT_TRASH_RETENTION_DAYS: i64 = 30;
+pub const DEFAULT_WORKER_INTERVAL_SECONDS: i64 = 300;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -16,6 +18,8 @@ pub struct Config {
     pub presigned_url_ttl_seconds: i64,
     pub resumable_upload_ttl_seconds: i64,
     pub public_web_url: String,
+    pub trash_retention_days: i64,
+    pub worker_interval_seconds: i64,
 }
 
 impl Config {
@@ -35,6 +39,11 @@ impl Config {
             ),
             public_web_url: env::var("PUBLIC_WEB_URL")
                 .unwrap_or_else(|_| DEFAULT_PUBLIC_WEB_URL.to_string()),
+            trash_retention_days: env_i64("TRASH_RETENTION_DAYS", DEFAULT_TRASH_RETENTION_DAYS),
+            worker_interval_seconds: env_i64(
+                "WORKER_INTERVAL_SECONDS",
+                DEFAULT_WORKER_INTERVAL_SECONDS,
+            ),
         }
     }
 
@@ -54,6 +63,11 @@ impl Config {
             ),
             public_web_url: env::var("PUBLIC_WEB_URL")
                 .unwrap_or_else(|_| DEFAULT_PUBLIC_WEB_URL.to_string()),
+            trash_retention_days: env_i64("TRASH_RETENTION_DAYS", DEFAULT_TRASH_RETENTION_DAYS),
+            worker_interval_seconds: env_i64(
+                "WORKER_INTERVAL_SECONDS",
+                DEFAULT_WORKER_INTERVAL_SECONDS,
+            ),
         }
     }
 

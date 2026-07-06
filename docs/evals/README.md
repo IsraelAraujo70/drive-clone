@@ -129,3 +129,20 @@ delete in gap-free seq order with a snapshot on upserts and only an id on the
 tombstone; pagination with `limit=1` drains one entry at a time and reports
 `has_more`; a cursor past the end returns empty without advancing; the other
 user's feed never sees the owner's changes; and a negative cursor returns `422`.
+
+## Worker Jobs Smoke
+
+Run after docker-compose Postgres is available on port `5433`:
+
+```bash
+docker compose up -d postgres minio minio-create-bucket
+bash docs/evals/worker-jobs-smoke.sh
+```
+
+The script runs the targeted integration tests for worker-owned behavior:
+permanent trash purge deletes the bucket object and file row, decrements quota,
+and preserves the sync tombstone; purge claims prevent duplicate workers from
+processing the same file and block restore while permanent deletion is in
+flight; stale claims cannot release or purge renewed claims; quota
+reconciliation repairs a deliberately corrupted
+`storage_used_bytes`.

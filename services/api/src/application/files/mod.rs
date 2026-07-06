@@ -1,4 +1,5 @@
 pub mod browse_folder;
+pub mod cleanup_orphans;
 pub mod complete_upload;
 pub mod create_folder;
 pub mod create_share_link;
@@ -13,6 +14,8 @@ pub mod list_share_links;
 pub mod list_shared_with_me;
 pub mod list_shares;
 pub mod list_trash;
+pub mod purge_trash;
+pub mod reconcile_quota;
 pub mod resolve_share_link;
 pub mod restore_file;
 pub mod restore_folder;
@@ -26,6 +29,9 @@ pub mod update_file;
 pub mod update_folder;
 
 pub use browse_folder::BrowseFolderUseCase;
+pub use cleanup_orphans::{
+    CleanupOrphanObjectsUseCase, CleanupOrphansOutput, DEFAULT_ORPHAN_MIN_AGE_SECONDS,
+};
 pub use complete_upload::CompleteUploadUseCase;
 pub use create_folder::{CreateFolderInput, CreateFolderUseCase};
 pub use create_share_link::{CreateShareLinkInput, CreateShareLinkOutput, CreateShareLinkUseCase};
@@ -40,6 +46,8 @@ pub use list_share_links::ListShareLinksUseCase;
 pub use list_shared_with_me::ListSharedWithMeUseCase;
 pub use list_shares::ListSharesUseCase;
 pub use list_trash::ListTrashUseCase;
+pub use purge_trash::{PurgeTrashOutput, PurgeTrashUseCase};
+pub use reconcile_quota::{ReconcileQuotaOutput, ReconcileQuotaUseCase};
 pub use resolve_share_link::{ResolveShareLinkOutput, ResolveShareLinkUseCase};
 pub use restore_file::RestoreFileUseCase;
 pub use restore_folder::RestoreFolderUseCase;

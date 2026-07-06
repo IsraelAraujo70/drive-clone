@@ -433,14 +433,6 @@ const folders = [
         tests: ["expect([200, 401, 404, 409, 502]).to.include(res.status);"],
       },
       {
-        name: "Cleanup Expired Uploads",
-        method: "post",
-        url: "{{baseUrl}}/files/uploads/cleanup-expired",
-        auth: "bearer",
-        docs: "Expires stale pending resumable uploads and aborts their multipart uploads in object storage.",
-        tests: ["expect([200, 401, 502]).to.include(res.status);"],
-      },
-      {
         name: "List Files",
         method: "get",
         url: "{{baseUrl}}/files",

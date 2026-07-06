@@ -3,3 +3,4 @@ pub mod health;
 pub mod router;
 pub mod server;
 pub mod state;
+pub mod worker;

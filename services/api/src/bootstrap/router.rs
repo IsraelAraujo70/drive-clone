@@ -29,10 +29,6 @@ pub fn build_router(state: AppState, cors: CorsConfig) -> Router {
             post(file_routes::create_resumable_upload),
         )
         .route(
-            "/files/uploads/cleanup-expired",
-            post(file_routes::expire_resumable_uploads),
-        )
-        .route(
             "/files/uploads/pending",
             get(file_routes::list_pending_uploads),
         )

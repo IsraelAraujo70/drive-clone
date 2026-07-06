@@ -20,6 +20,13 @@ pub struct CompletedUploadPart {
     pub etag: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredObject {
+    pub key: String,
+    pub last_modified: DateTime<Utc>,
+    pub size_bytes: i64,
+}
+
 #[async_trait]
 pub trait ObjectStorage: Send + Sync {
     async fn presign_put(
@@ -64,4 +71,8 @@ pub trait ObjectStorage: Send + Sync {
         object_key: &str,
         upload_id: &str,
     ) -> Result<(), StorageError>;
+
+    async fn delete_object(&self, object_key: &str) -> Result<(), StorageError>;
+
+    async fn list_objects(&self) -> Result<Vec<StoredObject>, StorageError>;
 }

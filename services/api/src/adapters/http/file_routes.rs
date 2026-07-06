@@ -8,13 +8,13 @@ use crate::adapters::http::auth_extractor::AuthenticatedUser;
 use crate::adapters::http::dto::{
     BrowseDriveQuery, CreateFolderRequest, CreateResumableUploadRequest,
     CreateResumableUploadResponse, CreateShareLinkRequest, CreateShareLinkResponse,
-    CreateUploadRequest, CreateUploadResponse, DownloadResponse, DriveBrowseResponse,
-    ExpireUploadsResponse, FileResponse, FileShareResponse, FolderResponse, ListFilesResponse,
-    ListFoldersResponse, ListPendingUploadsResponse, ListShareLinksResponse,
-    ListSharedWithMeResponse, ListSharesResponse, PresignUploadPartRequest,
-    PresignUploadPartResponse, PublicShareLinkResponse, RecordUploadPartRequest, SearchFilesQuery,
-    SearchFilesResponse, ShareFileRequest, SyncChangesQuery, SyncChangesResponse,
-    UpdateFileRequest, UpdateFolderRequest, UploadPartResponse, UploadStatusResponse,
+    CreateUploadRequest, CreateUploadResponse, DownloadResponse, DriveBrowseResponse, FileResponse,
+    FileShareResponse, FolderResponse, ListFilesResponse, ListFoldersResponse,
+    ListPendingUploadsResponse, ListShareLinksResponse, ListSharedWithMeResponse,
+    ListSharesResponse, PresignUploadPartRequest, PresignUploadPartResponse,
+    PublicShareLinkResponse, RecordUploadPartRequest, SearchFilesQuery, SearchFilesResponse,
+    ShareFileRequest, SyncChangesQuery, SyncChangesResponse, UpdateFileRequest,
+    UpdateFolderRequest, UploadPartResponse, UploadStatusResponse,
 };
 use crate::adapters::http::error::HttpError;
 use crate::bootstrap::state::AppState;
@@ -102,15 +102,6 @@ pub async fn finalize_resumable_upload(
         .execute(&auth.user, file_id)
         .await?;
     Ok(Json(FileResponse::from(file)))
-}
-
-pub async fn expire_resumable_uploads(
-    State(state): State<AppState>,
-    auth: AuthenticatedUser,
-) -> Result<Json<ExpireUploadsResponse>, HttpError> {
-    let _ = auth;
-    let output = state.expire_resumable_uploads.execute(100).await?;
-    Ok(Json(ExpireUploadsResponse::from(output)))
 }
 
 pub async fn create_folder(

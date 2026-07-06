@@ -2,6 +2,7 @@ use crate::domain::error::DomainError;
 
 const FILENAME_MAX_CHARS: usize = 255;
 const CONTENT_TYPE_MAX_CHARS: usize = 255;
+const SEARCH_QUERY_MAX_CHARS: usize = 100;
 
 pub fn validate_filename(filename: &str) -> Result<String, DomainError> {
     validate_item_name(filename)
@@ -66,6 +67,15 @@ pub fn validate_checksum(checksum: Option<&str>) -> Result<Option<String>, Domai
     }
 }
 
+pub fn validate_search_query(query: &str) -> Result<String, DomainError> {
+    let query = query.trim();
+    if query.is_empty() || query.chars().count() > SEARCH_QUERY_MAX_CHARS {
+        Err(DomainError::Validation("Enter a search query"))
+    } else {
+        Ok(query.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,5 +110,13 @@ mod tests {
             validate_size(11, 10),
             Err(DomainError::FileTooLarge)
         ));
+    }
+
+    #[test]
+    fn search_query_validation_trims_and_limits_length() {
+        assert_eq!(validate_search_query(" report ").unwrap(), "report");
+        assert!(validate_search_query("").is_err());
+        assert!(validate_search_query("   ").is_err());
+        assert!(validate_search_query(&"a".repeat(101)).is_err());
     }
 }

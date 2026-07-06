@@ -92,3 +92,25 @@ pub struct SharedFile {
     pub file: DriveFile,
     pub owner: FileUser,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SearchAccess {
+    Owned,
+    Shared,
+}
+
+impl SearchAccess {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Owned => "owned",
+            Self::Shared => "shared",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SearchFileResult {
+    pub file: DriveFile,
+    pub access: SearchAccess,
+    pub owner: Option<FileUser>,
+}

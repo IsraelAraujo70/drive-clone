@@ -5,12 +5,13 @@ use uuid::Uuid;
 
 use crate::application::auth::signup::AuthResponse as UseCaseAuthResponse;
 use crate::application::files::{
-    CreateFolderInput, CreateUploadOutput, DownloadFileOutput, ShareFileInput, UpdateFileInput,
-    UpdateFolderInput,
+    CreateFolderInput, CreateUploadOutput, DownloadFileOutput, SearchFilesInput, ShareFileInput,
+    UpdateFileInput, UpdateFolderInput,
 };
 use crate::domain::auth::User;
 use crate::domain::files::{
-    DriveBrowse, DriveFile, FileShare, FileUser, Folder, FolderPathEntry, SharedFile, UploadRequest,
+    DriveBrowse, DriveFile, FileShare, FileUser, Folder, FolderPathEntry, SearchFileResult,
+    SharedFile, UploadRequest,
 };
 
 #[derive(Deserialize)]
@@ -207,6 +208,30 @@ pub struct BrowseDriveQuery {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct SearchFilesQuery {
+    pub q: String,
+    #[serde(default)]
+    pub include_deleted: bool,
+    pub limit: Option<i64>,
+}
+
+impl SearchFilesQuery {
+    pub fn normalized_query(&self) -> String {
+        self.q.trim().to_string()
+    }
+}
+
+impl From<SearchFilesQuery> for SearchFilesInput {
+    fn from(query: SearchFilesQuery) -> Self {
+        Self {
+            query: query.q,
+            include_deleted: query.include_deleted,
+            limit: query.limit,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
 pub struct UpdateFileRequest {
     filename: Option<String>,
     #[serde(default, deserialize_with = "deserialize_nullable_uuid_patch_field")]
@@ -362,6 +387,38 @@ pub struct ListSharedWithMeResponse {
 impl From<Vec<SharedFile>> for ListSharedWithMeResponse {
     fn from(files: Vec<SharedFile>) -> Self {
         Self {
+            files: files.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct SearchFileResultResponse {
+    access: String,
+    file: FileResponse,
+    owner: Option<FileUserResponse>,
+}
+
+impl From<SearchFileResult> for SearchFileResultResponse {
+    fn from(result: SearchFileResult) -> Self {
+        Self {
+            access: result.access.as_str().to_string(),
+            file: result.file.into(),
+            owner: result.owner.map(Into::into),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct SearchFilesResponse {
+    query: String,
+    files: Vec<SearchFileResultResponse>,
+}
+
+impl SearchFilesResponse {
+    pub fn new(query: String, files: Vec<SearchFileResult>) -> Self {
+        Self {
+            query,
             files: files.into_iter().map(Into::into).collect(),
         }
     }

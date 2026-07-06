@@ -15,22 +15,22 @@ use crate::application::files::{
     CreateUploadUseCase, DeleteFileUseCase, DeleteFolderUseCase, DownloadFileUseCase,
     ListDriveTrashUseCase, ListFilesUseCase, ListFoldersUseCase, ListSharedWithMeUseCase,
     ListSharesUseCase, ListTrashUseCase, RestoreFileUseCase, RestoreFolderUseCase,
-    RevokeShareUseCase, ShareFileInput, ShareFileUseCase, UpdateFileInput, UpdateFileUseCase,
-    UpdateFolderInput, UpdateFolderUseCase,
+    RevokeShareUseCase, SearchFilesInput, SearchFilesUseCase, ShareFileInput, ShareFileUseCase,
+    UpdateFileInput, UpdateFileUseCase, UpdateFolderInput, UpdateFolderUseCase,
 };
 use crate::application::ports::RepositoryError;
 use crate::application::ports::auth::{AuthRepository, CreateUserRecord};
 use crate::application::ports::clock::{Clock, FixedClock};
 use crate::application::ports::files::{
-    CreateFolderRecord, CreatePendingFileRecord, FileRepository, UpdateFileRecord,
-    UpdateFolderRecord,
+    CreateFolderRecord, CreatePendingFileRecord, FileRepository, SearchFilesRecord,
+    UpdateFileRecord, UpdateFolderRecord,
 };
 use crate::application::ports::id_generator::SequenceIdGenerator;
 use crate::domain::auth::{User, UserWithPassword, hash_password, hash_token};
 use crate::domain::error::DomainError;
 use crate::domain::files::{
-    DriveBrowse, DriveFile, FileShare, FileState, FileUser, Folder, PendingFile, SharedFile,
-    UploadRequest,
+    DriveBrowse, DriveFile, FileShare, FileState, FileUser, Folder, PendingFile, SearchAccess,
+    SearchFileResult, SharedFile, UploadRequest,
 };
 
 fn fixed_now() -> DateTime<Utc> {
@@ -822,6 +822,73 @@ impl FileRepository for FakeFileRepository {
             })
             .collect())
     }
+
+    async fn search_accessible_files(
+        &self,
+        input: SearchFilesRecord,
+    ) -> Result<Vec<SearchFileResult>, RepositoryError> {
+        let query = input.query.to_lowercase();
+        let completed = self.completed.lock().unwrap();
+        let owners = self.owners.lock().unwrap();
+        let users = self.users.lock().unwrap();
+        let shares = self.shares.lock().unwrap();
+        let mut results: Vec<SearchFileResult> = completed
+            .iter()
+            .filter_map(|(file_id, file)| {
+                if file.state != FileState::Complete
+                    || !file.filename.to_lowercase().contains(&query)
+                {
+                    return None;
+                }
+
+                if owners.get(file_id).copied() == Some(input.user_id)
+                    && (input.include_deleted || file.deleted_at.is_none())
+                {
+                    return Some(SearchFileResult {
+                        file: file.clone(),
+                        access: SearchAccess::Owned,
+                        owner: None,
+                    });
+                }
+
+                if file.deleted_at.is_none() && shares.contains_key(&(*file_id, input.user_id)) {
+                    let owner_id = owners.get(file_id)?;
+                    return Some(SearchFileResult {
+                        file: file.clone(),
+                        access: SearchAccess::Shared,
+                        owner: users.get(owner_id).cloned(),
+                    });
+                }
+
+                None
+            })
+            .collect();
+
+        results.sort_by(|a, b| {
+            let a_name = a.file.filename.to_lowercase();
+            let b_name = b.file.filename.to_lowercase();
+            let a_rank = if a_name == query {
+                0
+            } else if a_name.starts_with(&query) {
+                1
+            } else {
+                2
+            };
+            let b_rank = if b_name == query {
+                0
+            } else if b_name.starts_with(&query) {
+                1
+            } else {
+                2
+            };
+            a_rank
+                .cmp(&b_rank)
+                .then_with(|| b.file.completed_at.cmp(&a.file.completed_at))
+                .then_with(|| b.file.id.cmp(&a.file.id))
+        });
+        results.truncate(input.limit as usize);
+        Ok(results)
+    }
 }
 
 #[tokio::test]
@@ -1326,6 +1393,143 @@ async fn shared_grantee_can_download_until_share_is_revoked_or_file_deleted() {
             .unwrap_err(),
         AppError::Domain(DomainError::FileNotFound)
     );
+}
+
+#[tokio::test]
+async fn search_files_is_case_insensitive_acl_scoped_and_excludes_trash_by_default() {
+    let repo = Arc::new(FakeFileRepository::default());
+    let owner = user(
+        Uuid::parse_str("23232323-2323-4323-8323-232323232323").unwrap(),
+        "owner@example.com",
+        0,
+        100,
+    );
+    let grantee = user(
+        Uuid::parse_str("24242424-2424-4424-8424-242424242424").unwrap(),
+        "friend@example.com",
+        0,
+        100,
+    );
+    let other = user(
+        Uuid::parse_str("25252525-2525-4525-8525-252525252525").unwrap(),
+        "other@example.com",
+        0,
+        100,
+    );
+
+    let owned_id = Uuid::parse_str("26262626-2626-4626-8626-262626262626").unwrap();
+    let shared_id = Uuid::parse_str("27272727-2727-4727-8727-272727272727").unwrap();
+    let private_id = Uuid::parse_str("28282828-2828-4828-8828-282828282828").unwrap();
+    let pending_id = Uuid::parse_str("29292929-2929-4929-8929-292929292929").unwrap();
+    let deleted_id = Uuid::parse_str("30303030-3030-4030-8030-303030303030").unwrap();
+    let deleted_shared_id = Uuid::parse_str("31313131-3131-4131-8131-313131313131").unwrap();
+
+    let mut owned = completed_file(owned_id, "friend/quarterly");
+    owned.filename = "Report-Quarterly.txt".to_string();
+    repo.insert_completed(&grantee, owned);
+
+    let mut shared = completed_file(shared_id, "owner/shared");
+    shared.filename = "shared-report.txt".to_string();
+    repo.insert_completed(&owner, shared);
+    repo.shares
+        .lock()
+        .unwrap()
+        .insert((shared_id, grantee.id), fixed_now());
+
+    let mut private = completed_file(private_id, "other/private");
+    private.filename = "private-report.txt".to_string();
+    repo.insert_completed(&other, private);
+
+    let mut pending = completed_file(pending_id, "friend/pending");
+    pending.filename = "pending-report.txt".to_string();
+    pending.state = FileState::Pending;
+    repo.insert_completed(&grantee, pending);
+
+    let mut deleted = completed_file(deleted_id, "friend/deleted");
+    deleted.filename = "deleted-report.txt".to_string();
+    deleted.deleted_at = Some(fixed_now());
+    repo.insert_completed(&grantee, deleted);
+
+    let mut deleted_shared = completed_file(deleted_shared_id, "owner/deleted-shared");
+    deleted_shared.filename = "deleted-shared-report.txt".to_string();
+    deleted_shared.deleted_at = Some(fixed_now());
+    repo.insert_completed(&owner, deleted_shared);
+    repo.shares
+        .lock()
+        .unwrap()
+        .insert((deleted_shared_id, grantee.id), fixed_now());
+
+    let use_case = SearchFilesUseCase::new(repo.clone());
+    let results = use_case
+        .execute(
+            &grantee,
+            SearchFilesInput {
+                query: "REPORT".to_string(),
+                include_deleted: false,
+                limit: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let filenames: Vec<_> = results
+        .iter()
+        .map(|result| result.file.filename.as_str())
+        .collect();
+    assert_eq!(filenames, vec!["Report-Quarterly.txt", "shared-report.txt"]);
+    assert_eq!(results[0].access, SearchAccess::Owned);
+    assert_eq!(results[1].access, SearchAccess::Shared);
+    assert_eq!(results[1].owner.as_ref().unwrap().id, owner.id);
+
+    let with_deleted = SearchFilesUseCase::new(repo.clone())
+        .execute(
+            &grantee,
+            SearchFilesInput {
+                query: "deleted".to_string(),
+                include_deleted: true,
+                limit: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(with_deleted.len(), 1);
+    assert_eq!(with_deleted[0].file.id, deleted_id);
+
+    assert_eq!(
+        SearchFilesUseCase::new(repo.clone())
+            .execute(
+                &grantee,
+                SearchFilesInput {
+                    query: " ".to_string(),
+                    include_deleted: false,
+                    limit: None,
+                },
+            )
+            .await
+            .unwrap_err(),
+        AppError::Domain(DomainError::Validation("Enter a search query"))
+    );
+
+    let mut literal = completed_file(Uuid::new_v4(), "friend/literal");
+    literal.filename = "literal_%_report.txt".to_string();
+    repo.insert_completed(&grantee, literal);
+    let mut similar = completed_file(Uuid::new_v4(), "friend/similar");
+    similar.filename = "literal-x-report.txt".to_string();
+    repo.insert_completed(&grantee, similar);
+
+    let wildcard_results = SearchFilesUseCase::new(repo)
+        .execute(
+            &grantee,
+            SearchFilesInput {
+                query: "%_".to_string(),
+                include_deleted: false,
+                limit: Some(10),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(wildcard_results.len(), 1);
+    assert_eq!(wildcard_results[0].file.filename, "literal_%_report.txt");
 }
 
 #[tokio::test]

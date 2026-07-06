@@ -48,9 +48,10 @@ services/
   worker/
 ```
 
-Current deployable service:
+Current deployable services:
 
-- `services/api`: Rust API with auth, direct upload/download, file sharing, trash, folders, rename, and move.
+- `services/api`: Rust API with auth, direct upload/download, file sharing, trash, folders, rename, move, and filename search.
+- `apps/web`: Next.js app with auth, `/drive`, folder browsing, file actions, sharing, trash, and command-palette search.
 
 Run locally:
 
@@ -296,13 +297,13 @@ Done when a browser refresh or network interruption can resume a partially uploa
 
 Deliver:
 
-- Share-link creation and revocation.
+- User-to-user sharing by email.
 - Shared download authorization.
 - Filename search.
 - Search indexes.
 - Access-control tests.
 
-Done when users can share a file through a link, revoke the link, and search their own drive without leaking private files.
+Done when users can share a file with another registered user, revoke that access, and search accessible files without leaking private files.
 
 ### Milestone 4: Sync API and Rust Client
 
@@ -481,9 +482,10 @@ Implemented so far:
 - Folder organization backend and UI: `POST /folders`, `GET /drive`, `GET /folders`, `PATCH /files/{file_id}`, `PATCH /folders/{folder_id}`, recursive folder trash/restore, and `/drive` folder browsing.
 - Soft delete/trash/restore for files and folders.
 - User-to-user file sharing by email, shared-with-me, and revoke.
+- Filename search with owned/shared ACL scoping, trash excluded by default, PostgreSQL search indexes, command-palette UI, and search smoke eval.
 - Argon2 password hashing; opaque bearer session tokens stored hashed (SHA-256) with 30-day expiry.
 - Auth contract in `contracts/auth.md`; files contract in `contracts/files.md`; migrations in `services/api/migrations`.
 - Gate tests: API validation/token tests plus full HTTP auth/file/folder/share/trash flows against real Postgres, and web tests.
 - Repo-connected Railway deployments for the API and web services.
 
-Next milestone: search and resumable uploads. Sync API and a local Rust sync client are intentionally outside the current implementation cut.
+Next milestone: resumable uploads. Share links, sync API, and a local Rust sync client are intentionally outside the current implementation cut.

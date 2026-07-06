@@ -20,6 +20,7 @@ pub fn build_router(state: AppState, cors: CorsConfig) -> Router {
             post(file_routes::create_folder).get(file_routes::list_folders),
         )
         .route("/drive", get(file_routes::browse_drive))
+        .route("/search", get(file_routes::search_files))
         .route("/drive/trash", get(file_routes::list_drive_trash))
         .route("/files/uploads", post(file_routes::create_upload))
         .route("/files", get(file_routes::list_files))

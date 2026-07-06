@@ -9,7 +9,7 @@ use crate::application::files::{
     DeleteFileUseCase, DeleteFolderUseCase, DownloadFileUseCase, ListDriveTrashUseCase,
     ListFilesUseCase, ListFoldersUseCase, ListSharedWithMeUseCase, ListSharesUseCase,
     ListTrashUseCase, RestoreFileUseCase, RestoreFolderUseCase, RevokeShareUseCase,
-    ShareFileUseCase, UpdateFileUseCase, UpdateFolderUseCase,
+    SearchFilesUseCase, ShareFileUseCase, UpdateFileUseCase, UpdateFolderUseCase,
 };
 use crate::application::ports::auth::AuthRepository;
 use crate::application::ports::clock::{Clock, SystemClock};
@@ -30,6 +30,7 @@ pub struct AppState {
     pub browse_folder: BrowseFolderUseCase,
     pub list_folders: ListFoldersUseCase,
     pub list_files: ListFilesUseCase,
+    pub search_files: SearchFilesUseCase,
     pub download_file: DownloadFileUseCase,
     pub update_file: UpdateFileUseCase,
     pub update_folder: UpdateFolderUseCase,
@@ -77,6 +78,7 @@ impl AppState {
             browse_folder: BrowseFolderUseCase::new(file_repository.clone()),
             list_folders: ListFoldersUseCase::new(file_repository.clone()),
             list_files: ListFilesUseCase::new(file_repository.clone()),
+            search_files: SearchFilesUseCase::new(file_repository.clone()),
             delete_file: DeleteFileUseCase::new(file_repository.clone()),
             delete_folder: DeleteFolderUseCase::new(file_repository.clone()),
             restore_file: RestoreFileUseCase::new(file_repository.clone()),

@@ -63,6 +63,14 @@ export type SharedFileRecord = FileRecord & {
   owner: ShareUser
 }
 
+export type SearchAccess = "owned" | "shared"
+
+export type SearchFileResult = {
+  access: SearchAccess
+  file: FileRecord
+  owner: ShareUser | null
+}
+
 export type CreateUploadInput = {
   filename: string
   parent_folder_id?: string | null
@@ -95,6 +103,11 @@ export type ListFoldersResponse = {
 
 export type ListSharedFilesResponse = {
   files: SharedFileRecord[]
+}
+
+export type SearchFilesResponse = {
+  query: string
+  files: SearchFileResult[]
 }
 
 export type ListSharesResponse = {
@@ -278,6 +291,26 @@ export const api = {
     }),
   listSharedWithMe: (token: string) =>
     request<ListSharedFilesResponse>("/files/shared-with-me", { token }),
+  searchFiles: (
+    token: string,
+    query: string,
+    options: { include_deleted?: boolean; limit?: number } = {},
+  ) => {
+    const trimmed = query.trim()
+    if (!trimmed) {
+      return Promise.resolve({ query: trimmed, files: [] } satisfies SearchFilesResponse)
+    }
+
+    const params = [`q=${encodeURIComponent(trimmed)}`]
+    if (options.include_deleted !== undefined) {
+      params.push(`include_deleted=${String(options.include_deleted)}`)
+    }
+    if (options.limit !== undefined) {
+      params.push(`limit=${String(options.limit)}`)
+    }
+
+    return request<SearchFilesResponse>(`/search?${params.join("&")}`, { token })
+  },
   createDownload: (token: string, fileId: string) =>
     request<DownloadResponse>(`/files/${fileId}/download`, { token }),
   health: () => request<{ status: string; service: string }>("/health"),

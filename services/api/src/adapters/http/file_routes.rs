@@ -9,7 +9,8 @@ use crate::adapters::http::dto::{
     BrowseDriveQuery, CreateFolderRequest, CreateUploadRequest, CreateUploadResponse,
     DownloadResponse, DriveBrowseResponse, FileResponse, FileShareResponse, FolderResponse,
     ListFilesResponse, ListFoldersResponse, ListSharedWithMeResponse, ListSharesResponse,
-    ShareFileRequest, UpdateFileRequest, UpdateFolderRequest,
+    SearchFilesQuery, SearchFilesResponse, ShareFileRequest, UpdateFileRequest,
+    UpdateFolderRequest,
 };
 use crate::adapters::http::error::HttpError;
 use crate::bootstrap::state::AppState;
@@ -51,6 +52,16 @@ pub async fn browse_drive(
         .execute(&auth.user, query.parent_folder_id)
         .await?;
     Ok(Json(DriveBrowseResponse::from(browse)))
+}
+
+pub async fn search_files(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Query(query): Query<SearchFilesQuery>,
+) -> Result<Json<SearchFilesResponse>, HttpError> {
+    let normalized_query = query.normalized_query();
+    let files = state.search_files.execute(&auth.user, query.into()).await?;
+    Ok(Json(SearchFilesResponse::new(normalized_query, files)))
 }
 
 pub async fn list_folders(

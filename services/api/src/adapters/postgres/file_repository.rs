@@ -6,12 +6,12 @@ use uuid::Uuid;
 use crate::adapters::postgres::tx::map_sqlx_error;
 use crate::application::ports::RepositoryError;
 use crate::application::ports::files::{
-    CreateFolderRecord, CreatePendingFileRecord, FileRepository, UpdateFileRecord,
-    UpdateFolderRecord,
+    CreateFolderRecord, CreatePendingFileRecord, FileRepository, SearchFilesRecord,
+    UpdateFileRecord, UpdateFolderRecord,
 };
 use crate::domain::files::{
     DriveBrowse, DriveFile, FileShare, FileState, FileUser, Folder, FolderPathEntry, PendingFile,
-    SharedFile,
+    SearchAccess, SearchFileResult, SharedFile,
 };
 
 #[derive(Debug, Clone)]
@@ -22,6 +22,20 @@ pub struct PostgresFileRepository {
 impl PostgresFileRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    fn escape_like_literal(value: &str) -> String {
+        let mut escaped = String::with_capacity(value.len());
+        for ch in value.chars() {
+            match ch {
+                '\\' | '%' | '_' => {
+                    escaped.push('\\');
+                    escaped.push(ch);
+                }
+                _ => escaped.push(ch),
+            }
+        }
+        escaped
     }
 
     async fn ensure_active_parent(
@@ -241,6 +255,63 @@ impl From<SharedFileRow> for SharedFile {
                 email: row.owner_email,
                 display_name: row.owner_display_name,
             },
+        }
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct SearchFileRow {
+    id: Uuid,
+    filename: String,
+    parent_folder_id: Option<Uuid>,
+    content_type: String,
+    size_bytes: i64,
+    checksum_sha256: Option<String>,
+    object_key: String,
+    state: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    completed_at: Option<DateTime<Utc>>,
+    deleted_at: Option<DateTime<Utc>>,
+    access: String,
+    owner_id: Option<Uuid>,
+    owner_email: Option<String>,
+    owner_display_name: Option<String>,
+}
+
+impl From<SearchFileRow> for SearchFileResult {
+    fn from(row: SearchFileRow) -> Self {
+        let access = if row.access == SearchAccess::Shared.as_str() {
+            SearchAccess::Shared
+        } else {
+            SearchAccess::Owned
+        };
+        let owner = match (row.owner_id, row.owner_email, row.owner_display_name) {
+            (Some(id), Some(email), Some(display_name)) => Some(FileUser {
+                id,
+                email,
+                display_name,
+            }),
+            _ => None,
+        };
+
+        Self {
+            file: DriveFile {
+                id: row.id,
+                filename: row.filename,
+                parent_folder_id: row.parent_folder_id,
+                content_type: row.content_type,
+                size_bytes: row.size_bytes,
+                checksum_sha256: row.checksum_sha256,
+                object_key: row.object_key,
+                state: row.state.into(),
+                created_at: row.created_at,
+                updated_at: row.updated_at,
+                completed_at: row.completed_at,
+                deleted_at: row.deleted_at,
+            },
+            access,
+            owner,
         }
     }
 }
@@ -1002,6 +1073,63 @@ impl FileRepository for PostgresFileRepository {
              ORDER BY fs.created_at DESC, f.id DESC",
         )
         .bind(grantee_id)
+        .fetch_all(&self.pool)
+        .await
+        .map(|rows| rows.into_iter().map(Into::into).collect())
+        .map_err(map_sqlx_error)
+    }
+
+    async fn search_accessible_files(
+        &self,
+        input: SearchFilesRecord,
+    ) -> Result<Vec<SearchFileResult>, RepositoryError> {
+        let escaped_query = Self::escape_like_literal(&input.query.to_lowercase());
+        sqlx::query_as::<_, SearchFileRow>(
+            "WITH accessible AS (
+                SELECT f.id, f.filename, f.parent_folder_id, f.content_type, f.size_bytes, f.checksum_sha256,
+                       f.object_key, f.state, f.created_at, f.updated_at, f.completed_at, f.deleted_at,
+                       'owned'::text AS access,
+                       NULL::uuid AS owner_id,
+                       NULL::text AS owner_email,
+                       NULL::text AS owner_display_name
+                FROM files f
+                WHERE f.owner_id = $1
+                  AND f.state = 'complete'
+                  AND ($3 OR f.deleted_at IS NULL)
+                  AND lower(f.filename) LIKE '%' || $2 || '%' ESCAPE '\\'
+                UNION ALL
+                SELECT f.id, f.filename, f.parent_folder_id, f.content_type, f.size_bytes, f.checksum_sha256,
+                       f.object_key, f.state, f.created_at, f.updated_at, f.completed_at, f.deleted_at,
+                       'shared'::text AS access,
+                       owner.id AS owner_id,
+                       owner.email AS owner_email,
+                       owner.display_name AS owner_display_name
+                FROM file_shares fs
+                JOIN files f ON f.id = fs.file_id
+                JOIN users owner ON owner.id = f.owner_id
+                WHERE fs.grantee_id = $1
+                  AND f.state = 'complete'
+                  AND f.deleted_at IS NULL
+                  AND lower(f.filename) LIKE '%' || $2 || '%' ESCAPE '\\'
+             )
+             SELECT id, filename, parent_folder_id, content_type, size_bytes, checksum_sha256,
+                    object_key, state, created_at, updated_at, completed_at, deleted_at,
+                    access, owner_id, owner_email, owner_display_name
+             FROM accessible
+             ORDER BY
+               CASE
+                 WHEN lower(filename) = $2 THEN 0
+                 WHEN lower(filename) LIKE $2 || '%' ESCAPE '\\' THEN 1
+                 ELSE 2
+               END,
+               completed_at DESC NULLS LAST,
+               id DESC
+             LIMIT $4",
+        )
+        .bind(input.user_id)
+        .bind(escaped_query)
+        .bind(input.include_deleted)
+        .bind(input.limit)
         .fetch_all(&self.pool)
         .await
         .map(|rows| rows.into_iter().map(Into::into).collect())

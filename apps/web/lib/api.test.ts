@@ -408,6 +408,78 @@ describe("api client", () => {
     expect(init.headers.Authorization).toBe("Bearer secret-token")
   })
 
+  it("searches files with encoded query options and bearer token", async () => {
+    const file = {
+      id: "file-1",
+      filename: "report pdf.txt",
+      parent_folder_id: null,
+      content_type: "text/plain",
+      size_bytes: 42,
+      checksum_sha256: null,
+      object_key: "objects/file-1",
+      state: "complete",
+      created_at: "2026-07-02T12:00:00Z",
+      updated_at: "2026-07-02T12:01:00Z",
+      completed_at: "2026-07-02T12:01:00Z",
+      deleted_at: null,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        query: "report pdf",
+        files: [{ access: "owned", file, owner: null }],
+      }),
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      api.searchFiles("secret-token", " report pdf ", {
+        include_deleted: true,
+        limit: 10,
+      }),
+    ).resolves.toEqual({
+      query: "report pdf",
+      files: [{ access: "owned", file, owner: null }],
+    })
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe(
+      `${API_BASE_URL}/search?q=report%20pdf&include_deleted=true&limit=10`,
+    )
+    expect(init.headers.Authorization).toBe("Bearer secret-token")
+  })
+
+  it("does not request search for an empty client query", async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(api.searchFiles("secret-token", "   ")).resolves.toEqual({
+      query: "",
+      files: [],
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("surfaces search ApiError responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(422, {
+          error: "validation_error",
+          message: "Enter a search query",
+        }),
+      ),
+    )
+
+    const error = await api
+      .searchFiles("secret-token", "x")
+      .catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).status).toBe(422)
+    expect((error as ApiError).code).toBe("validation_error")
+    expect((error as ApiError).message).toBe("Enter a search query")
+  })
+
   it("surfaces user_not_found ApiError when sharing with an unknown email", async () => {
     vi.stubGlobal(
       "fetch",

@@ -52,12 +52,16 @@ async fn signup(app: Router, email: &str) -> String {
 }
 
 fn upload_body(size_bytes: i64) -> Value {
-    upload_body_in_folder(size_bytes, None)
+    upload_body_named("report.txt", size_bytes, None)
 }
 
 fn upload_body_in_folder(size_bytes: i64, parent_folder_id: Option<&str>) -> Value {
+    upload_body_named("report.txt", size_bytes, parent_folder_id)
+}
+
+fn upload_body_named(filename: &str, size_bytes: i64, parent_folder_id: Option<&str>) -> Value {
     json!({
-        "filename": "report.txt",
+        "filename": filename,
         "parent_folder_id": parent_folder_id,
         "content_type": "text/plain",
         "size_bytes": size_bytes,
@@ -89,12 +93,22 @@ async fn create_completed_file(
     token: &str,
     size_bytes: i64,
 ) -> (String, String) {
+    create_completed_file_named(app, storage, token, "report.txt", size_bytes).await
+}
+
+async fn create_completed_file_named(
+    app: Router,
+    storage: Arc<FakeObjectStorage>,
+    token: &str,
+    filename: &str,
+    size_bytes: i64,
+) -> (String, String) {
     let (status, upload) = request(
         app.clone(),
         "POST",
         "/files/uploads",
         Some(token),
-        Some(upload_body(size_bytes)),
+        Some(upload_body_named(filename, size_bytes, None)),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
@@ -251,6 +265,7 @@ async fn file_routes_require_auth(pool: PgPool) {
         ("GET", "/files/shared-with-me", None),
         ("GET", "/drive", None),
         ("GET", "/drive/trash", None),
+        ("GET", "/search?q=report", None),
         ("GET", "/folders", None),
         (
             "POST",
@@ -692,6 +707,164 @@ async fn shares_allow_grantee_download_and_can_be_listed_or_revoked(pool: PgPool
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"], "file_not_found");
+}
+
+#[sqlx::test]
+async fn search_returns_accessible_files_without_leaking_private_or_deleted_items(pool: PgPool) {
+    let storage = Arc::new(FakeObjectStorage::default());
+    let app = app_with_storage(pool, storage.clone());
+    let owner_token = signup(app.clone(), "search-owner@example.com").await;
+    let grantee_token = signup(app.clone(), "search-grantee@example.com").await;
+    let other_token = signup(app.clone(), "search-other@example.com").await;
+
+    let (exact_id, _) =
+        create_completed_file_named(app.clone(), storage.clone(), &grantee_token, "report", 10)
+            .await;
+    let (prefix_id, _) = create_completed_file_named(
+        app.clone(),
+        storage.clone(),
+        &grantee_token,
+        "report-notes.txt",
+        11,
+    )
+    .await;
+    let (substring_id, _) = create_completed_file_named(
+        app.clone(),
+        storage.clone(),
+        &grantee_token,
+        "notes-report.txt",
+        12,
+    )
+    .await;
+    let (deleted_id, _) = create_completed_file_named(
+        app.clone(),
+        storage.clone(),
+        &grantee_token,
+        "deleted-report.txt",
+        13,
+    )
+    .await;
+    let (shared_id, _) = create_completed_file_named(
+        app.clone(),
+        storage.clone(),
+        &owner_token,
+        "shared-report.txt",
+        14,
+    )
+    .await;
+    let (deleted_shared_id, _) = create_completed_file_named(
+        app.clone(),
+        storage.clone(),
+        &owner_token,
+        "deleted-shared-report.txt",
+        15,
+    )
+    .await;
+    let (private_id, _) = create_completed_file_named(
+        app.clone(),
+        storage.clone(),
+        &other_token,
+        "private-report.txt",
+        16,
+    )
+    .await;
+
+    for file_id in [&shared_id, &deleted_shared_id] {
+        let (status, _) = request(
+            app.clone(),
+            "POST",
+            &format!("/files/{file_id}/shares"),
+            Some(&owner_token),
+            Some(json!({"email": "search-grantee@example.com"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+    let (status, _) = request(
+        app.clone(),
+        "DELETE",
+        &format!("/files/{deleted_id}"),
+        Some(&grantee_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = request(
+        app.clone(),
+        "DELETE",
+        &format!("/files/{deleted_shared_id}"),
+        Some(&owner_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, body) = request(
+        app.clone(),
+        "GET",
+        "/search?q=REPORT",
+        Some(&grantee_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["query"], "REPORT");
+    let ids: Vec<_> = body["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| file["file"]["id"].as_str().unwrap().to_string())
+        .collect();
+    assert!(ids.contains(&exact_id));
+    assert!(ids.contains(&prefix_id));
+    assert!(ids.contains(&substring_id));
+    assert!(ids.contains(&shared_id));
+    assert!(!ids.contains(&deleted_id));
+    assert!(!ids.contains(&deleted_shared_id));
+    assert!(!ids.contains(&private_id));
+    assert_eq!(
+        body["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|result| result["file"]["id"].as_str() == Some(shared_id.as_str()))
+            .unwrap()["owner"]["email"],
+        "search-owner@example.com"
+    );
+
+    let (status, limited) = request(
+        app.clone(),
+        "GET",
+        "/search?q=report&limit=2",
+        Some(&grantee_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let names: Vec<_> = limited["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|result| result["file"]["filename"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["report", "report-notes.txt"]);
+
+    let (status, trash_search) = request(
+        app,
+        "GET",
+        "/search?q=deleted&include_deleted=true",
+        Some(&grantee_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let trash_ids: Vec<_> = trash_search["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| file["file"]["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(trash_ids, vec![deleted_id]);
 }
 
 #[sqlx::test]

@@ -2,7 +2,9 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::application::ports::RepositoryError;
-use crate::domain::files::{DriveBrowse, DriveFile, FileShare, Folder, PendingFile, SharedFile};
+use crate::domain::files::{
+    DriveBrowse, DriveFile, FileShare, Folder, PendingFile, SearchFileResult, SharedFile,
+};
 
 #[derive(Debug, Clone)]
 pub struct CreatePendingFileRecord {
@@ -36,6 +38,14 @@ pub struct UpdateFolderRecord {
     pub folder_id: Uuid,
     pub name: Option<String>,
     pub parent_folder_id: Option<Option<Uuid>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SearchFilesRecord {
+    pub user_id: Uuid,
+    pub query: String,
+    pub include_deleted: bool,
+    pub limit: i64,
 }
 
 #[async_trait]
@@ -151,4 +161,9 @@ pub trait FileRepository: Send + Sync {
         &self,
         grantee_id: Uuid,
     ) -> Result<Vec<SharedFile>, RepositoryError>;
+
+    async fn search_accessible_files(
+        &self,
+        input: SearchFilesRecord,
+    ) -> Result<Vec<SearchFileResult>, RepositoryError>;
 }

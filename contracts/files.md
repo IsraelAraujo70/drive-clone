@@ -111,6 +111,77 @@ Response `200`:
 }
 ```
 
+## GET /search?q=<query>&include_deleted=false&limit=20
+
+Searches completed files by filename. Results are scoped to files the
+authenticated user can access: owned files plus files shared with the user.
+Private files owned by other users never appear.
+
+Query parameters:
+
+- `q`: required after trimming, 1-100 characters.
+- `include_deleted`: optional, default `false`. When `true`, deleted owned
+  files can appear. Deleted shared files still do not appear because deleting a
+  file suspends shared access.
+- `limit`: optional, default `20`, clamped to `1..50`.
+
+Matching is case-insensitive substring search on `filename`. Literal `%`, `_`,
+and `\` characters are treated as normal query text, not SQL wildcards.
+
+Ordering:
+
+1. Exact filename match.
+2. Filename prefix match.
+3. Filename substring match.
+4. `completed_at DESC`.
+5. `id DESC`.
+
+Response `200`:
+
+```json
+{
+  "query": "report",
+  "files": [
+    {
+      "access": "owned",
+      "file": {
+        "id": "...",
+        "filename": "report.pdf",
+        "parent_folder_id": null,
+        "content_type": "application/pdf",
+        "size_bytes": 12345,
+        "checksum_sha256": null,
+        "object_key": "...",
+        "state": "complete",
+        "created_at": "...",
+        "updated_at": "...",
+        "completed_at": "...",
+        "deleted_at": null
+      },
+      "owner": null
+    },
+    {
+      "access": "shared",
+      "file": {
+        "id": "...",
+        "filename": "shared-report.pdf",
+        "parent_folder_id": null,
+        "content_type": "application/pdf",
+        "size_bytes": 12345,
+        "checksum_sha256": null,
+        "object_key": "...",
+        "state": "complete",
+        "created_at": "...",
+        "updated_at": "...",
+        "completed_at": "...",
+        "deleted_at": null
+      },
+      "owner": { "id": "...", "email": "owner@example.com", "display_name": "Owner" }
+    }
+  ]
+}
+```
+
 ## Folders, browse, rename, and move
 
 Folder names use the same validation as filenames: trimmed, required, max 255

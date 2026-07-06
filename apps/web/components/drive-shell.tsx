@@ -704,6 +704,12 @@ export function DriveShell() {
     router.replace("/")
   }
 
+  function handleViewChange(view: DriveView) {
+    setActiveView(view)
+    setDialogError(null)
+    setCurrentFolderId(null)
+  }
+
   async function handleUpload(file: File) {
     if (!token) {
       setError("Your session expired. Log in again to upload files.")
@@ -929,16 +935,13 @@ export function DriveShell() {
 
   return (
     <SidebarProvider>
-      <CommandMenuProvider>
+      <CommandMenuProvider
+        onViewChange={handleViewChange}
+        onDownload={(fileId) => handleDownload(fileId)}
+      >
         <AppSidebar
           activeView={activeView}
-          onViewChange={(view) => {
-            setActiveView(view)
-            setDialogError(null)
-            if (view !== "my-drive") {
-              setCurrentFolderId(null)
-            }
-          }}
+          onViewChange={handleViewChange}
         />
         <SidebarInset>
           <DriveHeader user={user} onLogout={handleLogout} />

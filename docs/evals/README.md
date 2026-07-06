@@ -52,3 +52,16 @@ upload into a folder, browse root and folder contents, rename file and folder,
 reject cross-user rename, reject a cyclic folder move, share the file, recursively
 delete the folder tree, verify shared access disappears, restore the tree, byte
 compare download, move the file back to root, and verify root browse.
+
+## Search Smoke
+
+Runs against any live API (local stack or production):
+
+```bash
+API_BASE_URL=https://api-production-bcad4.up.railway.app bash docs/evals/search-smoke.sh
+```
+
+Three fresh accounts exercise filename search ACLs: the owner sees owned active
+files, a grantee sees only the file explicitly shared with them, a third user's
+private file never appears, deleted files are excluded by default, and
+`include_deleted=true` only exposes the owner's own trash.

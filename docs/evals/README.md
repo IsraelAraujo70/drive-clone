@@ -28,3 +28,13 @@ bash docs/evals/minio-upload-smoke.sh
 ```
 
 The script signs up a user, creates a direct upload, PUTs bytes to MinIO, completes the file, verifies listing, requests a download URL, and byte-compares the downloaded object.
+
+## Share + Soft Delete Smoke
+
+Runs against any live API (local stack or production):
+
+```bash
+API_BASE_URL=https://api-production-bcad4.up.railway.app bash docs/evals/share-delete-smoke.sh
+```
+
+Two fresh accounts exercise the full access-control flow: private-by-default download denial, share validations (unknown email 404, self-share 422, idempotent re-share), shared-with-me listing with owner info, grantee download with byte comparison, soft delete (owner list, trash, grantee access all react), restore, and revoke.

@@ -14,22 +14,20 @@ headers {
 }
 
 body:json {
-{
-  "email": "user@example.com",
-  "password": "password123"
-}
-}
-
-script:post-response {
-if (res.body && res.body.token) {
-  bru.setEnvVar('authToken', res.body.token);
-}
-if (res.body && res.body.user && res.body.user.id) {
-  bru.setEnvVar('userId', res.body.user.id);
-}
+  {
+    "email": "{{loginEmail}}",
+    "password": "{{loginPassword}}"
+  }
 }
 
 tests {
+  if (res.body && res.body.token) {
+    bru.setVar('authToken', res.body.token);
+  }
+  if (res.body && res.body.user && res.body.user.id) {
+    bru.setVar('userId', res.body.user.id);
+  }
+
   test("response status is documented", function() {
     expect([200, 401]).to.include(res.status);
   });

@@ -18,18 +18,16 @@ headers {
 }
 
 body:json {
-{
-  "email": "{{granteeEmail}}"
-}
-}
-
-script:post-response {
-if (res.body && res.body.grantee && res.body.grantee.id) {
-  bru.setEnvVar('granteeId', res.body.grantee.id);
-}
+  {
+    "email": "{{granteeEmail}}"
+  }
 }
 
 tests {
+  if (res.body && res.body.grantee && res.body.grantee.id) {
+    bru.setVar('granteeId', res.body.grantee.id);
+  }
+
   test("response status is documented", function() {
     expect([201, 401, 404, 422]).to.include(res.status);
   });

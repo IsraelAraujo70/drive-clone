@@ -26,6 +26,11 @@ const environments = [
       uploadUrl: "",
       objectKey: "",
       searchQuery: "report",
+      signupEmail: "bruno-{{$timestamp}}@example.com",
+      signupPassword: "password123",
+      signupDisplayName: "Bruno User",
+      loginEmail: "user@example.com",
+      loginPassword: "password123",
       checksumSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       sizeBytes: "12",
     },
@@ -43,6 +48,11 @@ const environments = [
       uploadUrl: "",
       objectKey: "",
       searchQuery: "report",
+      signupEmail: "bruno-{{$timestamp}}@example.com",
+      signupPassword: "password123",
+      signupDisplayName: "Bruno User",
+      loginEmail: "user@example.com",
+      loginPassword: "password123",
       checksumSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       sizeBytes: "12",
     },
@@ -82,17 +92,17 @@ const folders = [
         url: "{{baseUrl}}/auth/signup",
         auth: "none",
         body: {
-          email: "bruno-{{$timestamp}}@example.com",
-          password: "password123",
-          display_name: "Bruno User",
+          email: "{{signupEmail}}",
+          password: "{{signupPassword}}",
+          display_name: "{{signupDisplayName}}",
         },
         docs: "Creates an account and session. Email is trimmed/lowercased; password must be 8-128 chars. Saves token and user id to the active environment.",
         postResponse: [
           "if (res.body && res.body.token) {",
-          "  bru.setEnvVar('authToken', res.body.token);",
+          "  bru.setVar('authToken', res.body.token);",
           "}",
           "if (res.body && res.body.user && res.body.user.id) {",
-          "  bru.setEnvVar('userId', res.body.user.id);",
+          "  bru.setVar('userId', res.body.user.id);",
           "}",
         ],
         tests: [
@@ -106,16 +116,16 @@ const folders = [
         url: "{{baseUrl}}/auth/login",
         auth: "none",
         body: {
-          email: "user@example.com",
-          password: "password123",
+          email: "{{loginEmail}}",
+          password: "{{loginPassword}}",
         },
         docs: "Authenticates an existing user. Unknown email and wrong password both return invalid_credentials. Saves token and user id to the active environment.",
         postResponse: [
           "if (res.body && res.body.token) {",
-          "  bru.setEnvVar('authToken', res.body.token);",
+          "  bru.setVar('authToken', res.body.token);",
           "}",
           "if (res.body && res.body.user && res.body.user.id) {",
-          "  bru.setEnvVar('userId', res.body.user.id);",
+          "  bru.setVar('userId', res.body.user.id);",
           "}",
         ],
         tests: ["expect([200, 401]).to.include(res.status);"],
@@ -211,7 +221,7 @@ const folders = [
         docs: "Creates a folder in My Drive root or inside an active owned folder. Names are trimmed, max 255 chars, and cannot contain path separators.",
         postResponse: [
           "if (res.body && res.body.id) {",
-          "  bru.setEnvVar('folderId', res.body.id);",
+          "  bru.setVar('folderId', res.body.id);",
           "}",
         ],
         tests: ["expect([201, 401, 404, 422]).to.include(res.status);"],
@@ -273,13 +283,13 @@ const folders = [
         docs: "Creates pending file metadata and returns a short-lived presigned PUT URL. The client uploads bytes directly to upload_url.",
         postResponse: [
           "if (res.body && res.body.file_id) {",
-          "  bru.setEnvVar('fileId', res.body.file_id);",
+          "  bru.setVar('fileId', res.body.file_id);",
           "}",
           "if (res.body && res.body.upload_url) {",
-          "  bru.setEnvVar('uploadUrl', res.body.upload_url);",
+          "  bru.setVar('uploadUrl', res.body.upload_url);",
           "}",
           "if (res.body && res.body.object_key) {",
-          "  bru.setEnvVar('objectKey', res.body.object_key);",
+          "  bru.setVar('objectKey', res.body.object_key);",
           "}",
         ],
         tests: ["expect([201, 401, 404, 409, 413, 422]).to.include(res.status);"],
@@ -379,7 +389,7 @@ const folders = [
         docs: "Owner-only grant by registered user email. Self-share returns validation_error; unknown email returns user_not_found; duplicate share is idempotent.",
         postResponse: [
           "if (res.body && res.body.grantee && res.body.grantee.id) {",
-          "  bru.setEnvVar('granteeId', res.body.grantee.id);",
+          "  bru.setVar('granteeId', res.body.grantee.id);",
           "}",
         ],
         tests: ["expect([201, 401, 404, 422]).to.include(res.status);"],
@@ -434,7 +444,11 @@ function formatJsonBody(body) {
   if (!body) {
     return "";
   }
-  return `body:json {\n${JSON.stringify(body, null, 2)}\n}\n`;
+  const json = JSON.stringify(body, null, 2)
+    .split("\n")
+    .map((line) => `  ${line}`)
+    .join("\n");
+  return `body:json {\n${json}\n}\n`;
 }
 
 function formatTextBody(textBody) {
@@ -444,18 +458,15 @@ function formatTextBody(textBody) {
   return `body:text {\n${textBody}}\n`;
 }
 
-function formatScript(name, lines) {
-  if (!lines?.length) {
+function formatTests(assertions, setup = []) {
+  if (!assertions?.length && !setup.length) {
     return "";
   }
-  return `${name} {\n${lines.join("\n")}\n}\n`;
-}
-
-function formatTests(assertions) {
-  if (!assertions?.length) {
-    return "";
-  }
-  return `tests {\n  test("response status is documented", function() {\n    ${assertions.join("\n    ")}\n  });\n}\n`;
+  const setupBlock = setup.length ? `  ${setup.join("\n  ")}\n\n` : "";
+  const assertionsBlock = assertions.length
+    ? `  test("response status is documented", function() {\n    ${assertions.join("\n    ")}\n  });\n`
+    : "";
+  return `tests {\n${setupBlock}${assertionsBlock}}\n`;
 }
 
 function formatDocs(text) {
@@ -504,8 +515,7 @@ function formatRequest(route, seq) {
     formatKeyValueBlock("headers", headers),
     formatJsonBody(route.body),
     formatTextBody(route.textBody),
-    formatScript("script:post-response", route.postResponse),
-    formatTests(route.tests),
+    formatTests(route.tests, route.postResponse),
     formatDocs(route.docs),
   ]
     .filter(Boolean)

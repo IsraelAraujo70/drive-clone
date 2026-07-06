@@ -18,19 +18,17 @@ headers {
 }
 
 body:json {
-{
-  "name": "Bruno Folder",
-  "parent_folder_id": null
-}
-}
-
-script:post-response {
-if (res.body && res.body.id) {
-  bru.setEnvVar('folderId', res.body.id);
-}
+  {
+    "name": "Bruno Folder",
+    "parent_folder_id": null
+  }
 }
 
 tests {
+  if (res.body && res.body.id) {
+    bru.setVar('folderId', res.body.id);
+  }
+
   test("response status is documented", function() {
     expect([201, 401, 404, 422]).to.include(res.status);
   });

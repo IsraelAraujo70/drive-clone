@@ -18,28 +18,26 @@ headers {
 }
 
 body:json {
-{
-  "filename": "bruno-report.txt",
-  "parent_folder_id": null,
-  "content_type": "text/plain",
-  "size_bytes": 12,
-  "checksum_sha256": "{{checksumSha256}}"
-}
-}
-
-script:post-response {
-if (res.body && res.body.file_id) {
-  bru.setEnvVar('fileId', res.body.file_id);
-}
-if (res.body && res.body.upload_url) {
-  bru.setEnvVar('uploadUrl', res.body.upload_url);
-}
-if (res.body && res.body.object_key) {
-  bru.setEnvVar('objectKey', res.body.object_key);
-}
+  {
+    "filename": "bruno-report.txt",
+    "parent_folder_id": null,
+    "content_type": "text/plain",
+    "size_bytes": 12,
+    "checksum_sha256": "{{checksumSha256}}"
+  }
 }
 
 tests {
+  if (res.body && res.body.file_id) {
+    bru.setVar('fileId', res.body.file_id);
+  }
+  if (res.body && res.body.upload_url) {
+    bru.setVar('uploadUrl', res.body.upload_url);
+  }
+  if (res.body && res.body.object_key) {
+    bru.setVar('objectKey', res.body.object_key);
+  }
+
   test("response status is documented", function() {
     expect([201, 401, 404, 409, 413, 422]).to.include(res.status);
   });

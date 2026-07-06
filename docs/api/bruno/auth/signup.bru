@@ -14,23 +14,21 @@ headers {
 }
 
 body:json {
-{
-  "email": "bruno-{{$timestamp}}@example.com",
-  "password": "password123",
-  "display_name": "Bruno User"
-}
-}
-
-script:post-response {
-if (res.body && res.body.token) {
-  bru.setEnvVar('authToken', res.body.token);
-}
-if (res.body && res.body.user && res.body.user.id) {
-  bru.setEnvVar('userId', res.body.user.id);
-}
+  {
+    "email": "{{signupEmail}}",
+    "password": "{{signupPassword}}",
+    "display_name": "{{signupDisplayName}}"
+  }
 }
 
 tests {
+  if (res.body && res.body.token) {
+    bru.setVar('authToken', res.body.token);
+  }
+  if (res.body && res.body.user && res.body.user.id) {
+    bru.setVar('userId', res.body.user.id);
+  }
+
   test("response status is documented", function() {
     expect(res.status).to.equal(201);
     expect(res.body).to.have.property('token');

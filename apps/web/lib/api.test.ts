@@ -89,6 +89,7 @@ describe("api client", () => {
 
     const result = await api.createUpload("secret-token", {
       filename: "report.pdf",
+      parent_folder_id: "folder-1",
       content_type: "application/pdf",
       size_bytes: 42,
       checksum_sha256: null,
@@ -102,22 +103,154 @@ describe("api client", () => {
     expect(init.headers["Content-Type"]).toBe("application/json")
     expect(JSON.parse(init.body)).toEqual({
       filename: "report.pdf",
+      parent_folder_id: "folder-1",
       content_type: "application/pdf",
       size_bytes: 42,
       checksum_sha256: null,
     })
   })
 
-  it("completes uploads, lists files, and requests download URLs", async () => {
-    const completedFile = {
+  it("creates folders and browses root or folder locations", async () => {
+    const folder = {
+      id: "folder-1",
+      name: "Projects",
+      parent_folder_id: null,
+      created_at: "2026-07-06T12:00:00Z",
+      updated_at: "2026-07-06T12:00:00Z",
+      deleted_at: null,
+    }
+    const browse = {
+      parent_folder_id: "folder-1",
+      breadcrumbs: [{ id: "folder-1", name: "Projects" }],
+      folders: [],
+      files: [],
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(201, folder))
+      .mockResolvedValueOnce(jsonResponse(200, browse))
+      .mockResolvedValueOnce(jsonResponse(200, { ...browse, parent_folder_id: null }))
+      .mockResolvedValueOnce(jsonResponse(200, { folders: [folder] }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      api.createFolder("secret-token", {
+        name: "Projects",
+        parent_folder_id: null,
+      }),
+    ).resolves.toEqual(folder)
+    await expect(api.browseDrive("secret-token", "folder-1")).resolves.toEqual(
+      browse,
+    )
+    await expect(api.browseDrive("secret-token", null)).resolves.toEqual({
+      ...browse,
+      parent_folder_id: null,
+    })
+    await expect(api.listFolders("secret-token")).resolves.toEqual({
+      folders: [folder],
+    })
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      `${API_BASE_URL}/folders`,
+      `${API_BASE_URL}/drive?parent_folder_id=folder-1`,
+      `${API_BASE_URL}/drive`,
+      `${API_BASE_URL}/folders`,
+    ])
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      name: "Projects",
+      parent_folder_id: null,
+    })
+  })
+
+  it("renames, moves, deletes, restores folders and lists drive trash", async () => {
+    const folder = {
+      id: "folder-1",
+      name: "Projects",
+      parent_folder_id: null,
+      created_at: "2026-07-06T12:00:00Z",
+      updated_at: "2026-07-06T12:00:00Z",
+      deleted_at: null,
+    }
+    const file = {
       id: "file-1",
       filename: "report.pdf",
+      parent_folder_id: "folder-1",
       content_type: "application/pdf",
       size_bytes: 42,
       checksum_sha256: null,
       object_key: "objects/file-1",
       state: "complete",
       created_at: "2026-07-02T12:00:00Z",
+      updated_at: "2026-07-02T12:01:00Z",
+      completed_at: "2026-07-02T12:01:00Z",
+      deleted_at: null,
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, { ...file, filename: "renamed.pdf" }))
+      .mockResolvedValueOnce(jsonResponse(200, { ...folder, name: "Work" }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(jsonResponse(200, folder))
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          parent_folder_id: null,
+          breadcrumbs: [],
+          folders: [folder],
+          files: [],
+        }),
+      )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      api.updateFile("secret-token", "file-1", {
+        filename: "renamed.pdf",
+        parent_folder_id: null,
+      }),
+    ).resolves.toMatchObject({ filename: "renamed.pdf" })
+    await expect(
+      api.updateFolder("secret-token", "folder-1", {
+        name: "Work",
+        parent_folder_id: null,
+      }),
+    ).resolves.toMatchObject({ name: "Work" })
+    await expect(api.deleteFolder("secret-token", "folder-1")).resolves.toBeUndefined()
+    await expect(api.restoreFolder("secret-token", "folder-1")).resolves.toEqual(
+      folder,
+    )
+    await expect(api.listDriveTrash("secret-token")).resolves.toEqual({
+      parent_folder_id: null,
+      breadcrumbs: [],
+      folders: [folder],
+      files: [],
+    })
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      `${API_BASE_URL}/files/file-1`,
+      `${API_BASE_URL}/folders/folder-1`,
+      `${API_BASE_URL}/folders/folder-1`,
+      `${API_BASE_URL}/folders/folder-1/restore`,
+      `${API_BASE_URL}/drive/trash`,
+    ])
+    expect(fetchMock.mock.calls[0][1].method).toBe("PATCH")
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      filename: "renamed.pdf",
+      parent_folder_id: null,
+    })
+    expect(fetchMock.mock.calls[2][1].method).toBe("DELETE")
+  })
+
+  it("completes uploads, lists files, and requests download URLs", async () => {
+    const completedFile = {
+      id: "file-1",
+      filename: "report.pdf",
+      parent_folder_id: null,
+      content_type: "application/pdf",
+      size_bytes: 42,
+      checksum_sha256: null,
+      object_key: "objects/file-1",
+      state: "complete",
+      created_at: "2026-07-02T12:00:00Z",
+      updated_at: "2026-07-02T12:01:00Z",
       completed_at: "2026-07-02T12:01:00Z",
       deleted_at: null,
     }
@@ -159,12 +292,14 @@ describe("api client", () => {
     const trashFile = {
       id: "file-1",
       filename: "report.pdf",
+      parent_folder_id: null,
       content_type: "application/pdf",
       size_bytes: 42,
       checksum_sha256: null,
       object_key: "objects/file-1",
       state: "complete",
       created_at: "2026-07-02T12:00:00Z",
+      updated_at: "2026-07-03T12:00:00Z",
       completed_at: "2026-07-02T12:01:00Z",
       deleted_at: "2026-07-03T12:00:00Z",
     }
@@ -243,12 +378,14 @@ describe("api client", () => {
     const sharedFile = {
       id: "file-1",
       filename: "report.pdf",
+      parent_folder_id: null,
       content_type: "application/pdf",
       size_bytes: 42,
       checksum_sha256: null,
       object_key: "objects/file-1",
       state: "complete",
       created_at: "2026-07-02T12:00:00Z",
+      updated_at: "2026-07-02T12:01:00Z",
       completed_at: "2026-07-02T12:01:00Z",
       deleted_at: null,
       owner: {

@@ -52,12 +52,35 @@ async fn signup(app: Router, email: &str) -> String {
 }
 
 fn upload_body(size_bytes: i64) -> Value {
+    upload_body_in_folder(size_bytes, None)
+}
+
+fn upload_body_in_folder(size_bytes: i64, parent_folder_id: Option<&str>) -> Value {
     json!({
         "filename": "report.txt",
+        "parent_folder_id": parent_folder_id,
         "content_type": "text/plain",
         "size_bytes": size_bytes,
         "checksum_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     })
+}
+
+async fn create_folder(
+    app: Router,
+    token: &str,
+    name: &str,
+    parent_folder_id: Option<&str>,
+) -> String {
+    let (status, body) = request(
+        app,
+        "POST",
+        "/folders",
+        Some(token),
+        Some(json!({"name": name, "parent_folder_id": parent_folder_id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    body["id"].as_str().unwrap().to_string()
 }
 
 async fn create_completed_file(
@@ -226,11 +249,259 @@ async fn file_routes_require_auth(pool: PgPool) {
         ("GET", "/files", None),
         ("GET", "/files/trash", None),
         ("GET", "/files/shared-with-me", None),
+        ("GET", "/drive", None),
+        ("GET", "/drive/trash", None),
+        ("GET", "/folders", None),
+        (
+            "POST",
+            "/folders",
+            Some(json!({"name": "Projects", "parent_folder_id": null})),
+        ),
+        (
+            "PATCH",
+            "/files/11111111-1111-4111-8111-111111111111",
+            Some(json!({"filename": "renamed.txt"})),
+        ),
+        (
+            "PATCH",
+            "/folders/11111111-1111-4111-8111-111111111111",
+            Some(json!({"name": "Renamed"})),
+        ),
+        (
+            "DELETE",
+            "/folders/11111111-1111-4111-8111-111111111111",
+            None,
+        ),
+        (
+            "POST",
+            "/folders/11111111-1111-4111-8111-111111111111/restore",
+            None,
+        ),
     ] {
         let (status, response) = request(app.clone(), method, uri, None, body).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert_eq!(response["error"], "unauthorized");
     }
+}
+
+#[sqlx::test]
+async fn folders_browse_upload_rename_and_move_follow_contract(pool: PgPool) {
+    let storage = Arc::new(FakeObjectStorage::default());
+    let app = app_with_storage(pool, storage.clone());
+    let owner_token = signup(app.clone(), "folders-owner@example.com").await;
+    let other_token = signup(app.clone(), "folders-other@example.com").await;
+
+    let projects_id = create_folder(app.clone(), &owner_token, "Projects", None).await;
+    let client_id = create_folder(app.clone(), &owner_token, "Client A", Some(&projects_id)).await;
+
+    let (status, root) = request(app.clone(), "GET", "/drive", Some(&owner_token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(root["folders"][0]["id"], projects_id);
+    assert_eq!(root["files"].as_array().unwrap().len(), 0);
+
+    let (status, upload) = request(
+        app.clone(),
+        "POST",
+        "/files/uploads",
+        Some(&owner_token),
+        Some(upload_body_in_folder(12, Some(&projects_id))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let file_id = upload["file_id"].as_str().unwrap();
+    let object_key = upload["object_key"].as_str().unwrap();
+    storage.put_object(object_key, 12);
+    let (status, completed) = request(
+        app.clone(),
+        "POST",
+        &format!("/files/{file_id}/complete"),
+        Some(&owner_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(completed["parent_folder_id"], projects_id);
+
+    let (status, folder_view) = request(
+        app.clone(),
+        "GET",
+        &format!("/drive?parent_folder_id={projects_id}"),
+        Some(&owner_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(folder_view["breadcrumbs"][0]["id"], projects_id);
+    assert_eq!(folder_view["folders"][0]["id"], client_id);
+    assert_eq!(folder_view["files"][0]["id"], file_id);
+
+    let (status, renamed_file) = request(
+        app.clone(),
+        "PATCH",
+        &format!("/files/{file_id}"),
+        Some(&owner_token),
+        Some(json!({"filename": "brief-renamed.txt"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(renamed_file["filename"], "brief-renamed.txt");
+
+    let (status, moved_file) = request(
+        app.clone(),
+        "PATCH",
+        &format!("/files/{file_id}"),
+        Some(&owner_token),
+        Some(json!({"parent_folder_id": null})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(moved_file["parent_folder_id"], Value::Null);
+
+    let (status, renamed_folder) = request(
+        app.clone(),
+        "PATCH",
+        &format!("/folders/{projects_id}"),
+        Some(&owner_token),
+        Some(json!({"name": "Work"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(renamed_folder["name"], "Work");
+
+    let (status, body) = request(
+        app.clone(),
+        "PATCH",
+        &format!("/folders/{projects_id}"),
+        Some(&owner_token),
+        Some(json!({"parent_folder_id": client_id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "invalid_file_state");
+
+    let (status, body) = request(
+        app.clone(),
+        "PATCH",
+        &format!("/files/{file_id}"),
+        Some(&other_token),
+        Some(json!({"filename": "stolen.txt"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "file_not_found");
+
+    let (status, body) = request(
+        app,
+        "GET",
+        &format!("/drive?parent_folder_id={projects_id}"),
+        Some(&other_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "file_not_found");
+}
+
+#[sqlx::test]
+async fn recursive_folder_delete_and_restore_follow_contract(pool: PgPool) {
+    let storage = Arc::new(FakeObjectStorage::default());
+    let app = app_with_storage(pool, storage.clone());
+    let owner_token = signup(app.clone(), "folder-trash-owner@example.com").await;
+    let grantee_token = signup(app.clone(), "folder-trash-grantee@example.com").await;
+
+    let work_id = create_folder(app.clone(), &owner_token, "Work", None).await;
+    let child_id = create_folder(app.clone(), &owner_token, "Client", Some(&work_id)).await;
+    let (status, upload) = request(
+        app.clone(),
+        "POST",
+        "/files/uploads",
+        Some(&owner_token),
+        Some(upload_body_in_folder(15, Some(&child_id))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let file_id = upload["file_id"].as_str().unwrap();
+    let object_key = upload["object_key"].as_str().unwrap();
+    storage.put_object(object_key, 15);
+    let (status, _) = request(
+        app.clone(),
+        "POST",
+        &format!("/files/{file_id}/complete"),
+        Some(&owner_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = request(
+        app.clone(),
+        "POST",
+        &format!("/files/{file_id}/shares"),
+        Some(&owner_token),
+        Some(json!({"email": "folder-trash-grantee@example.com"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = request(
+        app.clone(),
+        "DELETE",
+        &format!("/folders/{work_id}"),
+        Some(&owner_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, body) = request(
+        app.clone(),
+        "GET",
+        &format!("/files/{file_id}/download"),
+        Some(&owner_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "file_not_found");
+
+    let (status, shared) = request(
+        app.clone(),
+        "GET",
+        "/files/shared-with-me",
+        Some(&grantee_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(shared["files"].as_array().unwrap().len(), 0);
+
+    let (status, trash) =
+        request(app.clone(), "GET", "/drive/trash", Some(&owner_token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(trash["folders"][0]["id"], work_id);
+    assert_eq!(trash["files"].as_array().unwrap().len(), 0);
+
+    let (status, restored) = request(
+        app.clone(),
+        "POST",
+        &format!("/folders/{work_id}/restore"),
+        Some(&owner_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(restored["deleted_at"], Value::Null);
+
+    let (status, body) = request(
+        app,
+        "GET",
+        &format!("/files/{file_id}/download"),
+        Some(&grantee_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["download_url"].as_str().unwrap().contains(object_key));
 }
 
 #[sqlx::test]

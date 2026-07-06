@@ -14,7 +14,7 @@ The first version should be a working personal cloud drive:
 - Download files.
 - Rename, move, delete, and restore items.
 - See storage usage.
-- Share files through revocable links.
+- Share files with another registered user by email.
 - Search files by name.
 - Resume interrupted uploads.
 
@@ -50,7 +50,7 @@ services/
 
 Current deployable service:
 
-- `services/api`: minimal Rust API scaffold with `/` and `/health`.
+- `services/api`: Rust API with auth, direct upload/download, file sharing, trash, folders, rename, and move.
 
 Run locally:
 
@@ -183,18 +183,18 @@ Measurable outcomes:
 
 ## Sharing Design
 
-The MVP should use private share links:
+The current MVP uses private user-to-user sharing by email:
 
-- Owners can create a random share token.
-- Owners can revoke the token.
-- Downloads through the token still pass through authorization logic.
+- Owners can grant view/download access to a registered user's email.
+- Owners can revoke that grantee's access.
+- Shared downloads still pass through authorization logic.
 - Files remain private by default.
 
-Explicit user-to-user sharing can be added after link sharing works.
+Revocable share links remain a later product extension.
 
 Measurable outcomes:
 
-- Revoked links stop working immediately.
+- Revoked grants stop working immediately.
 - Search and browse endpoints do not expose private files to other users.
 
 ## Sync Design
@@ -388,7 +388,7 @@ Track:
 5. Download the file.
 6. Delete and restore the file.
 7. Start a large upload, interrupt it, and resume it.
-8. Create and revoke a share link.
+8. Create and revoke a user share.
 9. Search for the file.
 10. Show deployment health and test results.
 
@@ -477,10 +477,13 @@ Implemented so far:
 
 - Landing page, signup, and login (English UI) with a protected `/drive` shell, built on Next.js + Tailwind CSS + shadcn/ui.
 - Rust API on Axum + SQLx + PostgreSQL: `POST /auth/signup`, `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, and a DB-aware `GET /health`.
-- File upload backend: `POST /files/uploads`, `POST /files/{file_id}/complete`, `GET /files`, and `GET /files/{file_id}/download`.
+- File upload/download backend: `POST /files/uploads`, `POST /files/{file_id}/complete`, `GET /files`, and `GET /files/{file_id}/download`.
+- Folder organization backend and UI: `POST /folders`, `GET /drive`, `GET /folders`, `PATCH /files/{file_id}`, `PATCH /folders/{folder_id}`, recursive folder trash/restore, and `/drive` folder browsing.
+- Soft delete/trash/restore for files and folders.
+- User-to-user file sharing by email, shared-with-me, and revoke.
 - Argon2 password hashing; opaque bearer session tokens stored hashed (SHA-256) with 30-day expiry.
 - Auth contract in `contracts/auth.md`; files contract in `contracts/files.md`; migrations in `services/api/migrations`.
-- Gate tests: API validation/token tests plus full HTTP auth/file flows against real Postgres, and web tests.
+- Gate tests: API validation/token tests plus full HTTP auth/file/folder/share/trash flows against real Postgres, and web tests.
 - Repo-connected Railway deployments for the API and web services.
 
-Next milestone: file upload, folder browsing, and download (Milestone 1 continues).
+Next milestone: search and resumable uploads. Sync API and a local Rust sync client are intentionally outside the current implementation cut.

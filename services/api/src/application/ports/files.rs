@@ -2,16 +2,40 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::application::ports::RepositoryError;
-use crate::domain::files::{DriveFile, FileShare, PendingFile, SharedFile};
+use crate::domain::files::{DriveBrowse, DriveFile, FileShare, Folder, PendingFile, SharedFile};
 
 #[derive(Debug, Clone)]
 pub struct CreatePendingFileRecord {
     pub owner_id: Uuid,
     pub filename: String,
+    pub parent_folder_id: Option<Uuid>,
     pub content_type: String,
     pub size_bytes: i64,
     pub checksum_sha256: Option<String>,
     pub object_key: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateFolderRecord {
+    pub owner_id: Uuid,
+    pub name: String,
+    pub parent_folder_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone)]
+pub struct UpdateFileRecord {
+    pub owner_id: Uuid,
+    pub file_id: Uuid,
+    pub filename: Option<String>,
+    pub parent_folder_id: Option<Option<Uuid>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct UpdateFolderRecord {
+    pub owner_id: Uuid,
+    pub folder_id: Uuid,
+    pub name: Option<String>,
+    pub parent_folder_id: Option<Option<Uuid>>,
 }
 
 #[async_trait]
@@ -26,6 +50,16 @@ pub trait FileRepository: Send + Sync {
         &self,
         input: CreatePendingFileRecord,
     ) -> Result<PendingFile, RepositoryError>;
+
+    async fn create_folder(&self, input: CreateFolderRecord) -> Result<Folder, RepositoryError>;
+
+    async fn browse_folder(
+        &self,
+        owner_id: Uuid,
+        parent_folder_id: Option<Uuid>,
+    ) -> Result<DriveBrowse, RepositoryError>;
+
+    async fn list_active_folders(&self, owner_id: Uuid) -> Result<Vec<Folder>, RepositoryError>;
 
     async fn complete_upload_once(
         &self,
@@ -49,6 +83,16 @@ pub trait FileRepository: Send + Sync {
         file_id: Uuid,
     ) -> Result<Option<DriveFile>, RepositoryError>;
 
+    async fn update_owned_file(
+        &self,
+        input: UpdateFileRecord,
+    ) -> Result<DriveFile, RepositoryError>;
+
+    async fn update_owned_folder(
+        &self,
+        input: UpdateFolderRecord,
+    ) -> Result<Folder, RepositoryError>;
+
     async fn find_downloadable_file(
         &self,
         user_id: Uuid,
@@ -68,6 +112,20 @@ pub trait FileRepository: Send + Sync {
     ) -> Result<DriveFile, RepositoryError>;
 
     async fn list_trash(&self, owner_id: Uuid) -> Result<Vec<DriveFile>, RepositoryError>;
+
+    async fn soft_delete_owned_folder_tree(
+        &self,
+        owner_id: Uuid,
+        folder_id: Uuid,
+    ) -> Result<(), RepositoryError>;
+
+    async fn restore_owned_folder_tree(
+        &self,
+        owner_id: Uuid,
+        folder_id: Uuid,
+    ) -> Result<Folder, RepositoryError>;
+
+    async fn list_drive_trash(&self, owner_id: Uuid) -> Result<DriveBrowse, RepositoryError>;
 
     async fn create_share(
         &self,

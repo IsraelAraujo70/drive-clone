@@ -23,6 +23,10 @@ Stable file error codes:
 - `storage_error`
 - `user_not_found`
 
+Folder organization uses the same `file_not_found` code for private or missing
+folders so callers cannot distinguish cross-user resources from absent ones.
+Invalid folder moves, including cycles, return `invalid_file_state`.
+
 ## POST /files/uploads
 
 Request:
@@ -30,6 +34,7 @@ Request:
 ```json
 {
   "filename": "report.pdf",
+  "parent_folder_id": null,
   "content_type": "application/pdf",
   "size_bytes": 12345,
   "checksum_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -39,6 +44,8 @@ Request:
 Rules:
 
 - `filename` is trimmed, required, max 255 chars, and cannot contain path separators.
+- `parent_folder_id` is optional. `null` or omitted uploads into My Drive root.
+  When present it must be an active folder owned by the authenticated user.
 - `content_type` is required and must look like `type/subtype`.
 - `size_bytes` must be positive, at or below `MAX_FILE_SIZE_BYTES`, and fit inside remaining user quota.
 - `checksum_sha256` is optional lowercase SHA-256 hex.
@@ -66,12 +73,14 @@ Response `200`:
 {
   "id": "1f8c6e4d-7752-43e8-b37c-06614a4d0f73",
   "filename": "report.pdf",
+  "parent_folder_id": null,
   "content_type": "application/pdf",
   "size_bytes": 12345,
   "checksum_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "object_key": "3f6ad0e9-.../6b5a6c2d-...",
   "state": "complete",
   "created_at": "2026-07-02T18:00:00Z",
+  "updated_at": "2026-07-02T18:01:00Z",
   "completed_at": "2026-07-02T18:01:00Z"
 }
 ```
@@ -88,17 +97,101 @@ Response `200`:
     {
       "id": "1f8c6e4d-7752-43e8-b37c-06614a4d0f73",
       "filename": "report.pdf",
+      "parent_folder_id": null,
       "content_type": "application/pdf",
       "size_bytes": 12345,
       "checksum_sha256": null,
       "object_key": "3f6ad0e9-.../6b5a6c2d-...",
       "state": "complete",
       "created_at": "2026-07-02T18:00:00Z",
+      "updated_at": "2026-07-02T18:01:00Z",
       "completed_at": "2026-07-02T18:01:00Z"
     }
   ]
 }
 ```
+
+## Folders, browse, rename, and move
+
+Folder names use the same validation as filenames: trimmed, required, max 255
+chars, no path separators, and not `.` or `..`. Duplicate names in the same
+folder are allowed.
+
+`FolderResponse`:
+
+```json
+{
+  "id": "7fd1e2de-cbc1-4f29-9d9f-3aaf8fb5366e",
+  "name": "Projects",
+  "parent_folder_id": null,
+  "created_at": "2026-07-06T12:00:00Z",
+  "updated_at": "2026-07-06T12:00:00Z",
+  "deleted_at": null
+}
+```
+
+### POST /folders
+
+Creates a folder in My Drive root or inside another active owned folder.
+
+Request:
+
+```json
+{ "name": "Projects", "parent_folder_id": null }
+```
+
+Response `201`: `FolderResponse`.
+
+### GET /drive?parent_folder_id=<uuid>
+
+Browses My Drive root when the query param is omitted. When `parent_folder_id`
+is present, the folder must be active and owned by the authenticated user.
+Returns active child folders and completed active files only.
+
+Response `200`:
+
+```json
+{
+  "parent_folder_id": null,
+  "breadcrumbs": [{ "id": "...", "name": "Projects" }],
+  "folders": [],
+  "files": []
+}
+```
+
+### GET /folders
+
+Returns all active folders owned by the user as a flat list for move dialogs:
+
+```json
+{ "folders": [ { "id": "...", "name": "Projects", "parent_folder_id": null, "created_at": "...", "updated_at": "...", "deleted_at": null } ] }
+```
+
+### PATCH /files/{file_id}
+
+Owner-only rename and/or move. File must be `complete` and not deleted. Moving
+to `null` places the file in My Drive root.
+
+Request:
+
+```json
+{ "filename": "renamed.pdf", "parent_folder_id": null }
+```
+
+Response `200`: `FileResponse`.
+
+### PATCH /folders/{folder_id}
+
+Owner-only rename and/or move. Folder must not be deleted. Moving a folder into
+itself or any descendant returns `409 invalid_file_state`.
+
+Request:
+
+```json
+{ "name": "Renamed", "parent_folder_id": null }
+```
+
+Response `200`: `FolderResponse`.
 
 ## GET /files/{file_id}/download
 
@@ -132,6 +225,33 @@ Response `200`: the full `FileResponse`.
 ### GET /files/trash
 
 Returns the authenticated user's deleted files, most recently deleted first. Same shape as `GET /files` (each file has a non-null `deleted_at`).
+
+### DELETE /folders/{folder_id}
+
+Owner-only. Recursively soft-deletes the folder, active descendant folders, and
+active descendant files. Items already in trash remain independently deleted.
+
+Response: `204 No Content`.
+
+### POST /folders/{folder_id}/restore
+
+Owner-only. Restores the folder tree deleted by that folder delete. Restore
+fails with `409 invalid_file_state` when the folder's parent is still deleted.
+
+Response `200`: `FolderResponse`.
+
+### GET /drive/trash
+
+Returns top-level trash entries for the authenticated user's drive:
+
+```json
+{
+  "parent_folder_id": null,
+  "breadcrumbs": [],
+  "folders": [],
+  "files": []
+}
+```
 
 ## Sharing
 

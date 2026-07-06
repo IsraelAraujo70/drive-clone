@@ -11,10 +11,16 @@ import {
 import { useRouter } from "next/navigation"
 import {
   AlertCircle,
+  ChevronRight,
   Download,
   FileIcon,
+  Folder,
+  FolderPlus,
   FolderOpen,
   Inbox,
+  MoreHorizontal,
+  MoveRight,
+  Pencil,
   RotateCcw,
   Search,
   Share2,
@@ -44,6 +50,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
   Empty,
   EmptyContent,
   EmptyDescription,
@@ -67,6 +81,8 @@ import {
   api,
   uploadFileDirect,
   type FileRecord,
+  type FolderPathEntry,
+  type FolderRecord,
   type Share,
   type SharedFileRecord,
   type User,
@@ -351,12 +367,244 @@ function ShareDialog({
   )
 }
 
+type DriveItem =
+  | { kind: "file"; item: FileRecord }
+  | { kind: "folder"; item: FolderRecord }
+
+function isDescendantFolder(
+  folders: FolderRecord[],
+  folderId: string,
+  candidateParentId: string,
+): boolean {
+  const byParent = new Map<string | null, FolderRecord[]>()
+  for (const folder of folders) {
+    const siblings = byParent.get(folder.parent_folder_id) ?? []
+    siblings.push(folder)
+    byParent.set(folder.parent_folder_id, siblings)
+  }
+
+  const stack = [...(byParent.get(folderId) ?? [])]
+  while (stack.length > 0) {
+    const folder = stack.pop()
+    if (!folder) {
+      continue
+    }
+    if (folder.id === candidateParentId) {
+      return true
+    }
+    stack.push(...(byParent.get(folder.id) ?? []))
+  }
+  return false
+}
+
+function CreateFolderDialog({
+  open,
+  submitting,
+  error,
+  onOpenChange,
+  onSubmit,
+}: {
+  open: boolean
+  submitting: boolean
+  error: string | null
+  onOpenChange: (open: boolean) => void
+  onSubmit: (name: string) => void
+}) {
+  const [name, setName] = useState("")
+
+  function handleOpenChange(nextOpen: boolean) {
+    if (!nextOpen) {
+      setName("")
+    }
+    onOpenChange(nextOpen)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Create folder</DialogTitle>
+          <DialogDescription>Add a folder in the current location.</DialogDescription>
+        </DialogHeader>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault()
+            onSubmit(name)
+          }}
+        >
+          <FieldGroup>
+            <Field data-invalid={Boolean(error)}>
+              <FieldLabel htmlFor="folder-name">Folder name</FieldLabel>
+              <Input
+                id="folder-name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                aria-invalid={Boolean(error)}
+                disabled={submitting}
+                required
+              />
+              {error && <FieldError>{error}</FieldError>}
+            </Field>
+          </FieldGroup>
+          <DialogFooter>
+            <Button type="submit" disabled={submitting || !name.trim()}>
+              {submitting && <Spinner data-icon="inline-start" />}
+              Create
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function RenameDialog({
+  target,
+  submitting,
+  error,
+  onOpenChange,
+  onSubmit,
+}: {
+  target: DriveItem | null
+  submitting: boolean
+  error: string | null
+  onOpenChange: (open: boolean) => void
+  onSubmit: (name: string) => void
+}) {
+  const defaultName =
+    target?.kind === "file" ? target.item.filename : (target?.item.name ?? "")
+
+  return (
+    <Dialog open={Boolean(target)} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md" key={target?.item.id ?? "rename"}>
+        <DialogHeader>
+          <DialogTitle>Rename {target?.kind ?? "item"}</DialogTitle>
+          <DialogDescription>Update the visible name in your drive.</DialogDescription>
+        </DialogHeader>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault()
+            const form = event.currentTarget
+            const data = new FormData(form)
+            onSubmit(String(data.get("name") ?? ""))
+          }}
+        >
+          <FieldGroup>
+            <Field data-invalid={Boolean(error)}>
+              <FieldLabel htmlFor="rename-name">Name</FieldLabel>
+              <Input
+                id="rename-name"
+                name="name"
+                defaultValue={defaultName}
+                aria-invalid={Boolean(error)}
+                disabled={submitting}
+                required
+              />
+              {error && <FieldError>{error}</FieldError>}
+            </Field>
+          </FieldGroup>
+          <DialogFooter>
+            <Button type="submit" disabled={submitting}>
+              {submitting && <Spinner data-icon="inline-start" />}
+              Rename
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function MoveDialog({
+  target,
+  folders,
+  submitting,
+  error,
+  onOpenChange,
+  onSubmit,
+}: {
+  target: DriveItem | null
+  folders: FolderRecord[]
+  submitting: boolean
+  error: string | null
+  onOpenChange: (open: boolean) => void
+  onSubmit: (parentFolderId: string | null) => void
+}) {
+  const [selected, setSelected] = useState<string | null | undefined>(undefined)
+  const effectiveSelected =
+    selected === undefined ? (target?.item.parent_folder_id ?? null) : selected
+
+  function handleOpenChange(nextOpen: boolean) {
+    if (!nextOpen) {
+      setSelected(undefined)
+    }
+    onOpenChange(nextOpen)
+  }
+
+  return (
+    <Dialog open={Boolean(target)} onOpenChange={handleOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Move {target?.kind ?? "item"}</DialogTitle>
+          <DialogDescription>Select a destination folder.</DialogDescription>
+        </DialogHeader>
+        <div className="flex max-h-80 flex-col gap-2 overflow-y-auto">
+          <Button
+            type="button"
+            variant={effectiveSelected === null ? "default" : "outline"}
+            className="justify-start"
+            onClick={() => setSelected(null)}
+          >
+            <FolderOpen data-icon="inline-start" />
+            My Drive
+          </Button>
+          {folders.map((folder) => {
+            const disabled =
+              target?.kind === "folder" &&
+              (folder.id === target.item.id ||
+                isDescendantFolder(folders, target.item.id, folder.id))
+            return (
+              <Button
+                key={folder.id}
+                type="button"
+                variant={effectiveSelected === folder.id ? "default" : "outline"}
+                className="justify-start"
+                onClick={() => setSelected(folder.id)}
+                disabled={disabled}
+              >
+                <Folder data-icon="inline-start" />
+                <span className="truncate">{folder.name}</span>
+              </Button>
+            )
+          })}
+        </div>
+        {error && <FieldError>{error}</FieldError>}
+        <DialogFooter>
+          <Button
+            type="button"
+            onClick={() => onSubmit(effectiveSelected)}
+            disabled={submitting}
+          >
+            {submitting && <Spinner data-icon="inline-start" />}
+            Move
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export function DriveShell() {
   const { user, token, logout, refreshUser } = useAuth()
   const router = useRouter()
   const inputRef = useRef<HTMLInputElement>(null)
   const [activeView, setActiveView] = useState<DriveView>("my-drive")
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null)
+  const [breadcrumbs, setBreadcrumbs] = useState<FolderPathEntry[]>([])
+  const [folders, setFolders] = useState<FolderRecord[]>([])
+  const [allFolders, setAllFolders] = useState<FolderRecord[]>([])
   const [files, setFiles] = useState<FileRecord[]>([])
+  const [trashFolders, setTrashFolders] = useState<FolderRecord[]>([])
   const [trashFiles, setTrashFiles] = useState<FileRecord[]>([])
   const [sharedFiles, setSharedFiles] = useState<SharedFileRecord[]>([])
   const [loadingFiles, setLoadingFiles] = useState(true)
@@ -366,6 +614,11 @@ export function DriveShell() {
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [restoreId, setRestoreId] = useState<string | null>(null)
   const [shareFile, setShareFile] = useState<FileRecord | null>(null)
+  const [createFolderOpen, setCreateFolderOpen] = useState(false)
+  const [renameTarget, setRenameTarget] = useState<DriveItem | null>(null)
+  const [moveTarget, setMoveTarget] = useState<DriveItem | null>(null)
+  const [dialogSubmitting, setDialogSubmitting] = useState(false)
+  const [dialogError, setDialogError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const completedFiles = useMemo(
@@ -391,6 +644,16 @@ export function DriveShell() {
     return completedFiles
   }, [activeView, completedFiles, completedSharedFiles, completedTrashFiles])
 
+  const visibleFolders = useMemo(() => {
+    if (activeView === "trash") {
+      return trashFolders
+    }
+    if (activeView === "my-drive") {
+      return folders
+    }
+    return []
+  }, [activeView, folders, trashFolders])
+
   const copy = viewCopy[activeView]
 
   const loadActiveView = useCallback(async () => {
@@ -403,21 +666,24 @@ export function DriveShell() {
     setError(null)
     try {
       if (activeView === "trash") {
-        const response = await api.listTrash(token)
+        const response = await api.listDriveTrash(token)
+        setTrashFolders(response.folders)
         setTrashFiles(response.files)
       } else if (activeView === "shared-with-me") {
         const response = await api.listSharedWithMe(token)
         setSharedFiles(response.files)
       } else {
-        const response = await api.listFiles(token)
+        const response = await api.browseDrive(token, currentFolderId)
+        setFolders(response.folders)
         setFiles(response.files)
+        setBreadcrumbs(response.breadcrumbs)
       }
     } catch (caught) {
       setError(getApiErrorMessage(caught))
     } finally {
       setLoadingFiles(false)
     }
-  }, [activeView, token])
+  }, [activeView, currentFolderId, token])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -452,6 +718,7 @@ export function DriveShell() {
     try {
       const upload = await api.createUpload(token, {
         filename: file.name,
+        parent_folder_id: currentFolderId,
         content_type: file.type || "application/octet-stream",
         size_bytes: file.size,
         checksum_sha256: null,
@@ -463,8 +730,10 @@ export function DriveShell() {
 
       await api.completeUpload(token, upload.file_id)
       await refreshUser()
-      const response = await api.listFiles(token)
+      const response = await api.browseDrive(token, currentFolderId)
+      setFolders(response.folders)
       setFiles(response.files)
+      setBreadcrumbs(response.breadcrumbs)
     } catch (caught) {
       setError(getApiErrorMessage(caught))
     } finally {
@@ -513,6 +782,28 @@ export function DriveShell() {
     }
   }
 
+  async function handleDeleteFolder(folderId: string) {
+    if (!token) {
+      setError("Your session expired. Log in again to delete folders.")
+      return
+    }
+
+    setError(null)
+    setDeleteId(folderId)
+    try {
+      await api.deleteFolder(token, folderId)
+      await refreshUser()
+      if (currentFolderId === folderId) {
+        setCurrentFolderId(null)
+      }
+      await loadActiveView()
+    } catch (caught) {
+      setError(getApiErrorMessage(caught))
+    } finally {
+      setDeleteId(null)
+    }
+  }
+
   async function handleRestore(fileId: string) {
     if (!token) {
       setError("Your session expired. Log in again to restore files.")
@@ -532,10 +823,123 @@ export function DriveShell() {
     }
   }
 
+  async function handleRestoreFolder(folderId: string) {
+    if (!token) {
+      setError("Your session expired. Log in again to restore folders.")
+      return
+    }
+
+    setError(null)
+    setRestoreId(folderId)
+    try {
+      await api.restoreFolder(token, folderId)
+      await refreshUser()
+      await loadActiveView()
+    } catch (caught) {
+      setError(getApiErrorMessage(caught))
+    } finally {
+      setRestoreId(null)
+    }
+  }
+
+  async function handleCreateFolder(name: string) {
+    if (!token) {
+      setDialogError("Your session expired. Log in again to create folders.")
+      return
+    }
+
+    setDialogSubmitting(true)
+    setDialogError(null)
+    try {
+      await api.createFolder(token, {
+        name: name.trim(),
+        parent_folder_id: currentFolderId,
+      })
+      setCreateFolderOpen(false)
+      await loadActiveView()
+    } catch (caught) {
+      setDialogError(getApiErrorMessage(caught))
+    } finally {
+      setDialogSubmitting(false)
+    }
+  }
+
+  async function loadMoveFolders() {
+    if (!token) {
+      setDialogError("Your session expired. Log in again to move items.")
+      return
+    }
+    try {
+      const response = await api.listFolders(token)
+      setAllFolders(response.folders)
+    } catch (caught) {
+      setDialogError(getApiErrorMessage(caught))
+    }
+  }
+
+  async function handleRename(name: string) {
+    if (!token || !renameTarget) {
+      setDialogError("Your session expired. Log in again to rename items.")
+      return
+    }
+
+    setDialogSubmitting(true)
+    setDialogError(null)
+    try {
+      if (renameTarget.kind === "file") {
+        await api.updateFile(token, renameTarget.item.id, { filename: name.trim() })
+      } else {
+        await api.updateFolder(token, renameTarget.item.id, { name: name.trim() })
+      }
+      setRenameTarget(null)
+      await loadActiveView()
+    } catch (caught) {
+      setDialogError(getApiErrorMessage(caught))
+    } finally {
+      setDialogSubmitting(false)
+    }
+  }
+
+  async function handleMove(parentFolderId: string | null) {
+    if (!token || !moveTarget) {
+      setDialogError("Your session expired. Log in again to move items.")
+      return
+    }
+
+    setDialogSubmitting(true)
+    setDialogError(null)
+    try {
+      if (moveTarget.kind === "file") {
+        await api.updateFile(token, moveTarget.item.id, {
+          parent_folder_id: parentFolderId,
+        })
+      } else {
+        await api.updateFolder(token, moveTarget.item.id, {
+          parent_folder_id: parentFolderId,
+        })
+      }
+      setMoveTarget(null)
+      await loadActiveView()
+    } catch (caught) {
+      setDialogError(getApiErrorMessage(caught))
+    } finally {
+      setDialogSubmitting(false)
+    }
+  }
+
   return (
     <SidebarProvider>
       <CommandMenuProvider>
-        <AppSidebar activeView={activeView} onViewChange={setActiveView} />
+        <AppSidebar
+          activeView={activeView}
+          onViewChange={(view) => {
+            setActiveView(view)
+            setDialogError(null)
+            if (view !== "my-drive") {
+              setCurrentFolderId(null)
+            }
+          }}
+        />
         <SidebarInset>
           <DriveHeader user={user} onLogout={handleLogout} />
 
@@ -558,9 +962,9 @@ export function DriveShell() {
               </Card>
               <Card>
                 <CardHeader>
-                  <CardDescription>Shared with me</CardDescription>
+                  <CardDescription>Folders here</CardDescription>
                   <CardTitle className="font-heading text-2xl">
-                    {completedSharedFiles.length}
+                    {folders.length}
                   </CardTitle>
                 </CardHeader>
               </Card>
@@ -609,6 +1013,32 @@ export function DriveShell() {
               </Card>
             )}
 
+            {activeView === "my-drive" && (
+              <div className="text-muted-foreground flex flex-wrap items-center gap-1 text-sm">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setCurrentFolderId(null)}
+                >
+                  My Drive
+                </Button>
+                {breadcrumbs.map((entry) => (
+                  <div key={entry.id} className="flex items-center gap-1">
+                    <ChevronRight aria-hidden="true" />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setCurrentFolderId(entry.id)}
+                    >
+                      {entry.name}
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+
             <Card>
               <CardHeader>
                 <CardDescription>{copy.cardDescription}</CardDescription>
@@ -623,13 +1053,26 @@ export function DriveShell() {
                     Reload
                   </Button>
                   {activeView === "my-drive" && (
-                    <Button
-                      onClick={() => inputRef.current?.click()}
-                      disabled={Boolean(uploadingName)}
-                    >
-                      <Upload data-icon="inline-start" />
-                      Upload
-                    </Button>
+                    <>
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setDialogError(null)
+                          setCreateFolderOpen(true)
+                        }}
+                        disabled={Boolean(uploadingName)}
+                      >
+                        <FolderPlus data-icon="inline-start" />
+                        New folder
+                      </Button>
+                      <Button
+                        onClick={() => inputRef.current?.click()}
+                        disabled={Boolean(uploadingName)}
+                      >
+                        <Upload data-icon="inline-start" />
+                        Upload
+                      </Button>
+                    </>
                   )}
                 </CardAction>
               </CardHeader>
@@ -639,7 +1082,7 @@ export function DriveShell() {
                     <Spinner />
                     Loading files…
                   </div>
-                ) : visibleFiles.length === 0 ? (
+                ) : visibleFiles.length === 0 && visibleFolders.length === 0 ? (
                   <Empty>
                     <EmptyHeader>
                       <EmptyMedia variant="icon">
@@ -665,6 +1108,106 @@ export function DriveShell() {
                   </Empty>
                 ) : (
                   <div className="flex flex-col gap-2">
+                    {visibleFolders.map((folder) => (
+                      <div
+                        key={folder.id}
+                        className="border-border flex items-center gap-3 rounded-lg border p-3"
+                      >
+                        <button
+                          type="button"
+                          className="bg-muted text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-md"
+                          onClick={() => {
+                            if (activeView === "my-drive") {
+                              setCurrentFolderId(folder.id)
+                            }
+                          }}
+                          aria-label={`Open ${folder.name}`}
+                        >
+                          <Folder aria-hidden="true" />
+                        </button>
+                        <div className="min-w-0 flex-1">
+                          <button
+                            type="button"
+                            className="truncate font-medium"
+                            onClick={() => {
+                              if (activeView === "my-drive") {
+                                setCurrentFolderId(folder.id)
+                              }
+                            }}
+                          >
+                            {folder.name}
+                          </button>
+                          <div className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                            {activeView === "trash" ? (
+                              <span>Deleted {formatDate(folder.deleted_at)}</span>
+                            ) : (
+                              <span>Created {formatDate(folder.created_at)}</span>
+                            )}
+                          </div>
+                        </div>
+                        {activeView === "my-drive" ? (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="outline" size="icon" aria-label="Folder actions">
+                                <MoreHorizontal />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-40">
+                              <DropdownMenuGroup>
+                                <DropdownMenuItem onSelect={() => setCurrentFolderId(folder.id)}>
+                                  <FolderOpen />
+                                  Open
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onSelect={() => {
+                                    setDialogError(null)
+                                    setRenameTarget({ kind: "folder", item: folder })
+                                  }}
+                                >
+                                  <Pencil />
+                                  Rename
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onSelect={() => {
+                                    setDialogError(null)
+                                    setMoveTarget({ kind: "folder", item: folder })
+                                    void loadMoveFolders()
+                                  }}
+                                >
+                                  <MoveRight />
+                                  Move
+                                </DropdownMenuItem>
+                              </DropdownMenuGroup>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuGroup>
+                                <DropdownMenuItem
+                                  variant="destructive"
+                                  onSelect={() => void handleDeleteFolder(folder.id)}
+                                  disabled={deleteId === folder.id}
+                                >
+                                  <Trash2 />
+                                  Delete
+                                </DropdownMenuItem>
+                              </DropdownMenuGroup>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        ) : (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => void handleRestoreFolder(folder.id)}
+                            disabled={restoreId === folder.id}
+                          >
+                            {restoreId === folder.id ? (
+                              <Spinner data-icon="inline-start" />
+                            ) : (
+                              <RotateCcw data-icon="inline-start" />
+                            )}
+                            Restore
+                          </Button>
+                        )}
+                      </div>
+                    ))}
                     {visibleFiles.map((file) => (
                       <div
                         key={file.id}
@@ -712,6 +1255,29 @@ export function DriveShell() {
                           )}
                           {activeView === "my-drive" && (
                             <>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setDialogError(null)
+                                  setRenameTarget({ kind: "file", item: file })
+                                }}
+                              >
+                                <Pencil data-icon="inline-start" />
+                                Rename
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setDialogError(null)
+                                  setMoveTarget({ kind: "file", item: file })
+                                  void loadMoveFolders()
+                                }}
+                              >
+                                <MoveRight data-icon="inline-start" />
+                                Move
+                              </Button>
                               <Button
                                 variant="outline"
                                 size="sm"
@@ -768,6 +1334,41 @@ export function DriveShell() {
                 setShareFile(null)
               }
             }}
+          />
+          <CreateFolderDialog
+            open={createFolderOpen}
+            submitting={dialogSubmitting}
+            error={dialogError}
+            onOpenChange={(open) => {
+              setCreateFolderOpen(open)
+              setDialogError(null)
+            }}
+            onSubmit={(name) => void handleCreateFolder(name)}
+          />
+          <RenameDialog
+            target={renameTarget}
+            submitting={dialogSubmitting}
+            error={dialogError}
+            onOpenChange={(open) => {
+              if (!open) {
+                setRenameTarget(null)
+                setDialogError(null)
+              }
+            }}
+            onSubmit={(name) => void handleRename(name)}
+          />
+          <MoveDialog
+            target={moveTarget}
+            folders={allFolders}
+            submitting={dialogSubmitting}
+            error={dialogError}
+            onOpenChange={(open) => {
+              if (!open) {
+                setMoveTarget(null)
+                setDialogError(null)
+              }
+            }}
+            onSubmit={(parentFolderId) => void handleMove(parentFolderId)}
           />
         </SidebarInset>
       </CommandMenuProvider>

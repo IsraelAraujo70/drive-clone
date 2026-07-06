@@ -38,3 +38,17 @@ API_BASE_URL=https://api-production-bcad4.up.railway.app bash docs/evals/share-d
 ```
 
 Two fresh accounts exercise the full access-control flow: private-by-default download denial, share validations (unknown email 404, self-share 422, idempotent re-share), shared-with-me listing with owner info, grantee download with byte comparison, soft delete (owner list, trash, grantee access all react), restore, and revoke.
+
+## Folder Organization Smoke
+
+Runs against any live API (local stack or production):
+
+```bash
+API_BASE_URL=https://api-production-bcad4.up.railway.app bash docs/evals/folder-organization-smoke.sh
+```
+
+Two fresh accounts exercise folder organization: create root and nested folders,
+upload into a folder, browse root and folder contents, rename file and folder,
+reject cross-user rename, reject a cyclic folder move, share the file, recursively
+delete the folder tree, verify shared access disappears, restore the tree, byte
+compare download, move the file back to root, and verify root browse.

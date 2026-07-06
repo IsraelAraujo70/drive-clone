@@ -29,14 +29,40 @@ impl From<String> for FileState {
 pub struct DriveFile {
     pub id: Uuid,
     pub filename: String,
+    pub parent_folder_id: Option<Uuid>,
     pub content_type: String,
     pub size_bytes: i64,
     pub checksum_sha256: Option<String>,
     pub object_key: String,
     pub state: FileState,
     pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
     pub deleted_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Folder {
+    pub id: Uuid,
+    pub name: String,
+    pub parent_folder_id: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub deleted_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FolderPathEntry {
+    pub id: Uuid,
+    pub name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct DriveBrowse {
+    pub parent_folder_id: Option<Uuid>,
+    pub breadcrumbs: Vec<FolderPathEntry>,
+    pub folders: Vec<Folder>,
+    pub files: Vec<DriveFile>,
 }
 
 #[derive(Debug, Clone)]

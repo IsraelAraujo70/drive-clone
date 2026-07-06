@@ -8,6 +8,8 @@ Current scope:
 - Expose `/health` for Railway health checks.
 - Authenticate users.
 - Create direct-upload sessions, verify completed objects, list completed files, and return authorized download URLs.
+- Create and browse folders, rename/move files and folders, and recursively trash/restore folder trees.
+- Share files by grantee email and list files shared with the current user.
 
 ## Module Architecture
 
@@ -31,6 +33,14 @@ Local commands:
 ```bash
 cargo test
 cargo run
+```
+
+Useful live evals from the repo root:
+
+```bash
+bash docs/evals/minio-upload-smoke.sh
+bash docs/evals/share-delete-smoke.sh
+bash docs/evals/folder-organization-smoke.sh
 ```
 
 The server reads:

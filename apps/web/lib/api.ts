@@ -21,14 +21,30 @@ export type AuthResponse = {
 export type FileRecord = {
   id: string
   filename: string
+  parent_folder_id: string | null
   content_type: string
   size_bytes: number
   checksum_sha256: string | null
   object_key: string
   state: "pending" | "complete"
   created_at: string
+  updated_at: string
   completed_at: string | null
   deleted_at: string | null
+}
+
+export type FolderRecord = {
+  id: string
+  name: string
+  parent_folder_id: string | null
+  created_at: string
+  updated_at: string
+  deleted_at: string | null
+}
+
+export type FolderPathEntry = {
+  id: string
+  name: string
 }
 
 export type ShareUser = {
@@ -49,6 +65,7 @@ export type SharedFileRecord = FileRecord & {
 
 export type CreateUploadInput = {
   filename: string
+  parent_folder_id?: string | null
   content_type: string
   size_bytes: number
   checksum_sha256?: string | null
@@ -63,6 +80,17 @@ export type CreateUploadResponse = {
 
 export type ListFilesResponse = {
   files: FileRecord[]
+}
+
+export type DriveBrowseResponse = {
+  parent_folder_id: string | null
+  breadcrumbs: FolderPathEntry[]
+  folders: FolderRecord[]
+  files: FileRecord[]
+}
+
+export type ListFoldersResponse = {
+  folders: FolderRecord[]
 }
 
 export type ListSharedFilesResponse = {
@@ -187,14 +215,54 @@ export const api = {
       token,
       body: input,
     }),
+  createFolder: (token: string, input: { name: string; parent_folder_id?: string | null }) =>
+    request<FolderRecord>("/folders", {
+      method: "POST",
+      token,
+      body: input,
+    }),
+  browseDrive: (token: string, parentFolderId?: string | null) => {
+    const query = parentFolderId
+      ? `?parent_folder_id=${encodeURIComponent(parentFolderId)}`
+      : ""
+    return request<DriveBrowseResponse>(`/drive${query}`, { token })
+  },
+  listFolders: (token: string) =>
+    request<ListFoldersResponse>("/folders", { token }),
   completeUpload: (token: string, fileId: string) =>
     request<FileRecord>(`/files/${fileId}/complete`, { method: "POST", token }),
   listFiles: (token: string) => request<ListFilesResponse>("/files", { token }),
+  updateFile: (
+    token: string,
+    fileId: string,
+    input: { filename?: string; parent_folder_id?: string | null },
+  ) =>
+    request<FileRecord>(`/files/${fileId}`, {
+      method: "PATCH",
+      token,
+      body: input,
+    }),
+  updateFolder: (
+    token: string,
+    folderId: string,
+    input: { name?: string; parent_folder_id?: string | null },
+  ) =>
+    request<FolderRecord>(`/folders/${folderId}`, {
+      method: "PATCH",
+      token,
+      body: input,
+    }),
   deleteFile: (token: string, fileId: string) =>
     request<void>(`/files/${fileId}`, { method: "DELETE", token }),
+  deleteFolder: (token: string, folderId: string) =>
+    request<void>(`/folders/${folderId}`, { method: "DELETE", token }),
   restoreFile: (token: string, fileId: string) =>
     request<FileRecord>(`/files/${fileId}/restore`, { method: "POST", token }),
+  restoreFolder: (token: string, folderId: string) =>
+    request<FolderRecord>(`/folders/${folderId}/restore`, { method: "POST", token }),
   listTrash: (token: string) => request<ListFilesResponse>("/files/trash", { token }),
+  listDriveTrash: (token: string) =>
+    request<DriveBrowseResponse>("/drive/trash", { token }),
   shareFile: (token: string, fileId: string, email: string) =>
     request<Share>(`/files/${fileId}/shares`, {
       method: "POST",

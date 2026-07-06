@@ -85,6 +85,7 @@ impl CreateUploadUseCase {
             .create_pending_file(CreatePendingFileRecord {
                 owner_id: user.id,
                 filename,
+                parent_folder_id: request.parent_folder_id,
                 content_type,
                 size_bytes: request.size_bytes,
                 checksum_sha256,

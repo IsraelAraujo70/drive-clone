@@ -11,19 +11,26 @@ use crate::application::auth::login::{LoginInput, LoginUseCase};
 use crate::application::auth::logout::LogoutUseCase;
 use crate::application::auth::signup::{SignupInput, SignupUseCase};
 use crate::application::files::{
-    CompleteUploadUseCase, CreateUploadUseCase, DeleteFileUseCase, DownloadFileUseCase,
-    ListFilesUseCase, ListSharedWithMeUseCase, ListSharesUseCase, ListTrashUseCase,
-    RestoreFileUseCase, RevokeShareUseCase, ShareFileInput, ShareFileUseCase,
+    BrowseFolderUseCase, CompleteUploadUseCase, CreateFolderInput, CreateFolderUseCase,
+    CreateUploadUseCase, DeleteFileUseCase, DeleteFolderUseCase, DownloadFileUseCase,
+    ListDriveTrashUseCase, ListFilesUseCase, ListFoldersUseCase, ListSharedWithMeUseCase,
+    ListSharesUseCase, ListTrashUseCase, RestoreFileUseCase, RestoreFolderUseCase,
+    RevokeShareUseCase, ShareFileInput, ShareFileUseCase, UpdateFileInput, UpdateFileUseCase,
+    UpdateFolderInput, UpdateFolderUseCase,
 };
 use crate::application::ports::RepositoryError;
 use crate::application::ports::auth::{AuthRepository, CreateUserRecord};
 use crate::application::ports::clock::{Clock, FixedClock};
-use crate::application::ports::files::{CreatePendingFileRecord, FileRepository};
+use crate::application::ports::files::{
+    CreateFolderRecord, CreatePendingFileRecord, FileRepository, UpdateFileRecord,
+    UpdateFolderRecord,
+};
 use crate::application::ports::id_generator::SequenceIdGenerator;
 use crate::domain::auth::{User, UserWithPassword, hash_password, hash_token};
 use crate::domain::error::DomainError;
 use crate::domain::files::{
-    DriveFile, FileShare, FileState, FileUser, PendingFile, SharedFile, UploadRequest,
+    DriveBrowse, DriveFile, FileShare, FileState, FileUser, Folder, PendingFile, SharedFile,
+    UploadRequest,
 };
 
 fn fixed_now() -> DateTime<Utc> {
@@ -45,12 +52,14 @@ fn completed_file(id: Uuid, object_key: &str) -> DriveFile {
     DriveFile {
         id,
         filename: "report.txt".to_string(),
+        parent_folder_id: None,
         content_type: "text/plain".to_string(),
         size_bytes: 12,
         checksum_sha256: None,
         object_key: object_key.to_string(),
         state: FileState::Complete,
         created_at: fixed_now(),
+        updated_at: fixed_now(),
         completed_at: Some(fixed_now()),
         deleted_at: None,
     }
@@ -165,11 +174,15 @@ struct FakeFileRepository {
     pending_bytes: Mutex<i64>,
     pending: Mutex<HashMap<Uuid, PendingFile>>,
     pending_owners: Mutex<HashMap<Uuid, Uuid>>,
+    pending_parents: Mutex<HashMap<Uuid, Option<Uuid>>>,
     completed: Mutex<HashMap<Uuid, DriveFile>>,
     owners: Mutex<HashMap<Uuid, Uuid>>,
+    folders: Mutex<HashMap<Uuid, Folder>>,
+    folder_owners: Mutex<HashMap<Uuid, Uuid>>,
     users: Mutex<HashMap<Uuid, FileUser>>,
     shares: Mutex<HashMap<(Uuid, Uuid), DateTime<Utc>>>,
     completed_count: Mutex<usize>,
+    next_folder_id: Mutex<Option<Uuid>>,
 }
 
 impl FakeFileRepository {
@@ -189,6 +202,45 @@ impl FakeFileRepository {
         self.owners.lock().unwrap().insert(file.id, owner.id);
         self.completed.lock().unwrap().insert(file.id, file);
     }
+
+    fn insert_folder(&self, owner: &User, folder: Folder) {
+        self.insert_user(owner);
+        self.folder_owners
+            .lock()
+            .unwrap()
+            .insert(folder.id, owner.id);
+        self.folders.lock().unwrap().insert(folder.id, folder);
+    }
+
+    fn active_parent_belongs_to(&self, owner_id: Uuid, parent_id: Option<Uuid>) -> bool {
+        let Some(parent_id) = parent_id else {
+            return true;
+        };
+        self.folder_owners.lock().unwrap().get(&parent_id).copied() == Some(owner_id)
+            && self
+                .folders
+                .lock()
+                .unwrap()
+                .get(&parent_id)
+                .is_some_and(|folder| folder.deleted_at.is_none())
+    }
+
+    fn folder_descendants(&self, folder_id: Uuid) -> Vec<Uuid> {
+        let folders = self.folders.lock().unwrap();
+        let mut descendants = Vec::new();
+        let mut stack = vec![folder_id];
+        while let Some(current) = stack.pop() {
+            if current != folder_id {
+                descendants.push(current);
+            }
+            for folder in folders.values() {
+                if folder.parent_folder_id == Some(current) {
+                    stack.push(folder.id);
+                }
+            }
+        }
+        descendants
+    }
 }
 
 #[async_trait]
@@ -205,6 +257,9 @@ impl FileRepository for FakeFileRepository {
         &self,
         input: CreatePendingFileRecord,
     ) -> Result<PendingFile, RepositoryError> {
+        if !self.active_parent_belongs_to(input.owner_id, input.parent_folder_id) {
+            return Err(RepositoryError::NotFound);
+        }
         let id = Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap();
         let file = PendingFile {
             id,
@@ -217,7 +272,88 @@ impl FileRepository for FakeFileRepository {
             .lock()
             .unwrap()
             .insert(id, input.owner_id);
+        self.pending_parents
+            .lock()
+            .unwrap()
+            .insert(id, input.parent_folder_id);
         Ok(file)
+    }
+
+    async fn create_folder(&self, input: CreateFolderRecord) -> Result<Folder, RepositoryError> {
+        if !self.active_parent_belongs_to(input.owner_id, input.parent_folder_id) {
+            return Err(RepositoryError::NotFound);
+        }
+        let id = self
+            .next_folder_id
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap_or_else(Uuid::new_v4);
+        let folder = Folder {
+            id,
+            name: input.name,
+            parent_folder_id: input.parent_folder_id,
+            created_at: fixed_now(),
+            updated_at: fixed_now(),
+            deleted_at: None,
+        };
+        self.folder_owners
+            .lock()
+            .unwrap()
+            .insert(id, input.owner_id);
+        self.folders.lock().unwrap().insert(id, folder.clone());
+        Ok(folder)
+    }
+
+    async fn browse_folder(
+        &self,
+        owner_id: Uuid,
+        parent_folder_id: Option<Uuid>,
+    ) -> Result<DriveBrowse, RepositoryError> {
+        if !self.active_parent_belongs_to(owner_id, parent_folder_id) {
+            return Err(RepositoryError::NotFound);
+        }
+        let folder_owners = self.folder_owners.lock().unwrap();
+        let folders = self.folders.lock().unwrap();
+        let owners = self.owners.lock().unwrap();
+        let completed = self.completed.lock().unwrap();
+        Ok(DriveBrowse {
+            parent_folder_id,
+            breadcrumbs: Vec::new(),
+            folders: folders
+                .values()
+                .filter(|folder| {
+                    folder_owners.get(&folder.id).copied() == Some(owner_id)
+                        && folder.parent_folder_id == parent_folder_id
+                        && folder.deleted_at.is_none()
+                })
+                .cloned()
+                .collect(),
+            files: completed
+                .values()
+                .filter(|file| {
+                    owners.get(&file.id).copied() == Some(owner_id)
+                        && file.parent_folder_id == parent_folder_id
+                        && file.deleted_at.is_none()
+                })
+                .cloned()
+                .collect(),
+        })
+    }
+
+    async fn list_active_folders(&self, owner_id: Uuid) -> Result<Vec<Folder>, RepositoryError> {
+        let folder_owners = self.folder_owners.lock().unwrap();
+        Ok(self
+            .folders
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|folder| {
+                folder_owners.get(&folder.id).copied() == Some(owner_id)
+                    && folder.deleted_at.is_none()
+            })
+            .cloned()
+            .collect())
     }
 
     async fn complete_upload_once(
@@ -238,6 +374,12 @@ impl FileRepository for FakeFileRepository {
             .unwrap()
             .remove(&file_id)
             .ok_or(RepositoryError::NotFound)?;
+        let parent_folder_id = self
+            .pending_parents
+            .lock()
+            .unwrap()
+            .remove(&file_id)
+            .unwrap_or(None);
         if pending_owner != owner_id {
             return Err(RepositoryError::NotFound);
         }
@@ -248,12 +390,14 @@ impl FileRepository for FakeFileRepository {
         let file = DriveFile {
             id: file_id,
             filename: "report.txt".to_string(),
+            parent_folder_id,
             content_type: "text/plain".to_string(),
             size_bytes: pending.size_bytes,
             checksum_sha256: None,
             object_key: pending.object_key,
             state: FileState::Complete,
             created_at: fixed_now(),
+            updated_at: fixed_now(),
             completed_at: Some(fixed_now()),
             deleted_at: None,
         };
@@ -305,6 +449,72 @@ impl FileRepository for FakeFileRepository {
             .get(&file_id)
             .filter(|file| file.deleted_at.is_none())
             .cloned())
+    }
+
+    async fn update_owned_file(
+        &self,
+        input: UpdateFileRecord,
+    ) -> Result<DriveFile, RepositoryError> {
+        if self.owners.lock().unwrap().get(&input.file_id).copied() != Some(input.owner_id) {
+            return Err(RepositoryError::NotFound);
+        }
+        if !self.active_parent_belongs_to(input.owner_id, input.parent_folder_id.flatten()) {
+            return Err(RepositoryError::NotFound);
+        }
+        let mut completed = self.completed.lock().unwrap();
+        let file = completed
+            .get_mut(&input.file_id)
+            .filter(|file| file.state == FileState::Complete && file.deleted_at.is_none())
+            .ok_or(RepositoryError::NotFound)?;
+        if let Some(filename) = input.filename {
+            file.filename = filename;
+        }
+        if let Some(parent_folder_id) = input.parent_folder_id {
+            file.parent_folder_id = parent_folder_id;
+        }
+        file.updated_at = fixed_now();
+        Ok(file.clone())
+    }
+
+    async fn update_owned_folder(
+        &self,
+        input: UpdateFolderRecord,
+    ) -> Result<Folder, RepositoryError> {
+        if self
+            .folder_owners
+            .lock()
+            .unwrap()
+            .get(&input.folder_id)
+            .copied()
+            != Some(input.owner_id)
+        {
+            return Err(RepositoryError::NotFound);
+        }
+        if !self.active_parent_belongs_to(input.owner_id, input.parent_folder_id.flatten()) {
+            return Err(RepositoryError::NotFound);
+        }
+        if let Some(parent_folder_id) = input.parent_folder_id.flatten() {
+            if parent_folder_id == input.folder_id
+                || self
+                    .folder_descendants(input.folder_id)
+                    .contains(&parent_folder_id)
+            {
+                return Err(RepositoryError::InvalidState);
+            }
+        }
+        let mut folders = self.folders.lock().unwrap();
+        let folder = folders
+            .get_mut(&input.folder_id)
+            .filter(|folder| folder.deleted_at.is_none())
+            .ok_or(RepositoryError::NotFound)?;
+        if let Some(name) = input.name {
+            folder.name = name;
+        }
+        if let Some(parent_folder_id) = input.parent_folder_id {
+            folder.parent_folder_id = parent_folder_id;
+        }
+        folder.updated_at = fixed_now();
+        Ok(folder.clone())
     }
 
     async fn find_downloadable_file(
@@ -376,6 +586,133 @@ impl FileRepository for FakeFileRepository {
             })
             .cloned()
             .collect())
+    }
+
+    async fn soft_delete_owned_folder_tree(
+        &self,
+        owner_id: Uuid,
+        folder_id: Uuid,
+    ) -> Result<(), RepositoryError> {
+        if self.folder_owners.lock().unwrap().get(&folder_id).copied() != Some(owner_id) {
+            return Err(RepositoryError::NotFound);
+        }
+        {
+            let folders = self.folders.lock().unwrap();
+            if !folders
+                .get(&folder_id)
+                .is_some_and(|folder| folder.deleted_at.is_none())
+            {
+                return Err(RepositoryError::NotFound);
+            }
+        }
+
+        let mut tree = self.folder_descendants(folder_id);
+        tree.push(folder_id);
+
+        {
+            let mut folders = self.folders.lock().unwrap();
+            for id in &tree {
+                if let Some(folder) = folders
+                    .get_mut(id)
+                    .filter(|folder| folder.deleted_at.is_none())
+                {
+                    folder.deleted_at = Some(fixed_now());
+                    folder.updated_at = fixed_now();
+                }
+            }
+        }
+
+        let mut completed = self.completed.lock().unwrap();
+        for file in completed.values_mut() {
+            if file.deleted_at.is_none()
+                && file.parent_folder_id.is_some_and(|id| tree.contains(&id))
+            {
+                file.deleted_at = Some(fixed_now());
+                file.updated_at = fixed_now();
+            }
+        }
+        Ok(())
+    }
+
+    async fn restore_owned_folder_tree(
+        &self,
+        owner_id: Uuid,
+        folder_id: Uuid,
+    ) -> Result<Folder, RepositoryError> {
+        if self.folder_owners.lock().unwrap().get(&folder_id).copied() != Some(owner_id) {
+            return Err(RepositoryError::NotFound);
+        }
+        {
+            let folders = self.folders.lock().unwrap();
+            let folder = folders.get(&folder_id).ok_or(RepositoryError::NotFound)?;
+            if folder.deleted_at.is_none() {
+                return Err(RepositoryError::NotFound);
+            }
+            if folder.parent_folder_id.is_some_and(|parent_id| {
+                folders
+                    .get(&parent_id)
+                    .is_some_and(|parent| parent.deleted_at.is_some())
+            }) {
+                return Err(RepositoryError::InvalidState);
+            }
+        }
+
+        let mut tree = self.folder_descendants(folder_id);
+        tree.push(folder_id);
+        {
+            let mut folders = self.folders.lock().unwrap();
+            for id in &tree {
+                if let Some(folder) = folders.get_mut(id) {
+                    folder.deleted_at = None;
+                    folder.updated_at = fixed_now();
+                }
+            }
+        }
+
+        let mut completed = self.completed.lock().unwrap();
+        for file in completed.values_mut() {
+            if file.parent_folder_id.is_some_and(|id| tree.contains(&id)) {
+                file.deleted_at = None;
+                file.updated_at = fixed_now();
+            }
+        }
+
+        self.folders
+            .lock()
+            .unwrap()
+            .get(&folder_id)
+            .cloned()
+            .ok_or(RepositoryError::NotFound)
+    }
+
+    async fn list_drive_trash(&self, owner_id: Uuid) -> Result<DriveBrowse, RepositoryError> {
+        let folder_owners = self.folder_owners.lock().unwrap();
+        let owners = self.owners.lock().unwrap();
+        Ok(DriveBrowse {
+            parent_folder_id: None,
+            breadcrumbs: Vec::new(),
+            folders: self
+                .folders
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|folder| {
+                    folder_owners.get(&folder.id).copied() == Some(owner_id)
+                        && folder.deleted_at.is_some()
+                })
+                .cloned()
+                .collect(),
+            files: self
+                .completed
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|file| {
+                    owners.get(&file.id).copied() == Some(owner_id) && file.deleted_at.is_some()
+                })
+                .cloned()
+                .collect(),
+        })
     }
 
     async fn create_share(
@@ -586,6 +923,7 @@ async fn create_upload_enforces_quota_and_max_size() {
             &owner,
             UploadRequest {
                 filename: "report.txt".to_string(),
+                parent_folder_id: None,
                 content_type: "text/plain".to_string(),
                 size_bytes: 5,
                 checksum_sha256: None,
@@ -600,6 +938,7 @@ async fn create_upload_enforces_quota_and_max_size() {
             &owner,
             UploadRequest {
                 filename: "report.txt".to_string(),
+                parent_folder_id: None,
                 content_type: "text/plain".to_string(),
                 size_bytes: 11,
                 checksum_sha256: None,
@@ -987,4 +1326,182 @@ async fn shared_grantee_can_download_until_share_is_revoked_or_file_deleted() {
             .unwrap_err(),
         AppError::Domain(DomainError::FileNotFound)
     );
+}
+
+#[tokio::test]
+async fn folder_create_browse_rename_move_and_cycle_rules_are_owner_scoped() {
+    let repo = Arc::new(FakeFileRepository::default());
+    let owner = user(
+        Uuid::parse_str("16161616-1616-4616-8616-161616161616").unwrap(),
+        "owner@example.com",
+        0,
+        100,
+    );
+    let other = user(
+        Uuid::parse_str("17171717-1717-4717-8717-171717171717").unwrap(),
+        "other@example.com",
+        0,
+        100,
+    );
+    let root_id = Uuid::parse_str("18181818-1818-4818-8818-181818181818").unwrap();
+    let child_id = Uuid::parse_str("19191919-1919-4919-8919-191919191919").unwrap();
+
+    *repo.next_folder_id.lock().unwrap() = Some(root_id);
+    let root = CreateFolderUseCase::new(repo.clone())
+        .execute(
+            &owner,
+            CreateFolderInput {
+                name: "Projects".to_string(),
+                parent_folder_id: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(root.name, "Projects");
+
+    *repo.next_folder_id.lock().unwrap() = Some(child_id);
+    CreateFolderUseCase::new(repo.clone())
+        .execute(
+            &owner,
+            CreateFolderInput {
+                name: "Client".to_string(),
+                parent_folder_id: Some(root_id),
+            },
+        )
+        .await
+        .unwrap();
+
+    let browse = BrowseFolderUseCase::new(repo.clone())
+        .execute(&owner, Some(root_id))
+        .await
+        .unwrap();
+    assert_eq!(browse.folders[0].id, child_id);
+    assert_eq!(
+        ListFoldersUseCase::new(repo.clone())
+            .execute(&owner)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+
+    let renamed = UpdateFolderUseCase::new(repo.clone())
+        .execute(
+            &owner,
+            UpdateFolderInput {
+                folder_id: root_id,
+                name: Some("Work".to_string()),
+                parent_folder_id: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(renamed.name, "Work");
+
+    assert_eq!(
+        UpdateFolderUseCase::new(repo.clone())
+            .execute(
+                &owner,
+                UpdateFolderInput {
+                    folder_id: root_id,
+                    name: None,
+                    parent_folder_id: Some(Some(child_id)),
+                },
+            )
+            .await
+            .unwrap_err(),
+        AppError::Domain(DomainError::InvalidFileState)
+    );
+
+    assert_eq!(
+        BrowseFolderUseCase::new(repo.clone())
+            .execute(&other, Some(root_id))
+            .await
+            .unwrap_err(),
+        AppError::Domain(DomainError::FileNotFound)
+    );
+    assert_eq!(
+        CreateFolderUseCase::new(repo)
+            .execute(
+                &other,
+                CreateFolderInput {
+                    name: "Invalid".to_string(),
+                    parent_folder_id: Some(root_id),
+                },
+            )
+            .await
+            .unwrap_err(),
+        AppError::Domain(DomainError::FileNotFound)
+    );
+}
+
+#[tokio::test]
+async fn folder_delete_and_restore_hide_and_restore_descendant_files() {
+    let repo = Arc::new(FakeFileRepository::default());
+    let owner = user(
+        Uuid::parse_str("20202020-2020-4020-8020-202020202020").unwrap(),
+        "owner@example.com",
+        0,
+        100,
+    );
+    let folder_id = Uuid::parse_str("21212121-2121-4121-8121-212121212121").unwrap();
+    let file_id = Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap();
+    repo.insert_folder(
+        &owner,
+        Folder {
+            id: folder_id,
+            name: "Work".to_string(),
+            parent_folder_id: None,
+            created_at: fixed_now(),
+            updated_at: fixed_now(),
+            deleted_at: None,
+        },
+    );
+    let mut file = completed_file(file_id, "owner/work");
+    file.parent_folder_id = Some(folder_id);
+    repo.insert_completed(&owner, file);
+
+    DeleteFolderUseCase::new(repo.clone())
+        .execute(&owner, folder_id)
+        .await
+        .unwrap();
+    assert!(
+        BrowseFolderUseCase::new(repo.clone())
+            .execute(&owner, Some(folder_id))
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        ListDriveTrashUseCase::new(repo.clone())
+            .execute(&owner)
+            .await
+            .unwrap()
+            .folders
+            .len(),
+        1
+    );
+
+    RestoreFolderUseCase::new(repo.clone())
+        .execute(&owner, folder_id)
+        .await
+        .unwrap();
+    let browse = BrowseFolderUseCase::new(repo.clone())
+        .execute(&owner, Some(folder_id))
+        .await
+        .unwrap();
+    assert_eq!(browse.files[0].id, file_id);
+
+    let moved = UpdateFileUseCase::new(repo)
+        .execute(
+            &owner,
+            UpdateFileInput {
+                file_id,
+                filename: Some("renamed.txt".to_string()),
+                parent_folder_id: Some(None),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(moved.filename, "renamed.txt");
+    assert_eq!(moved.parent_folder_id, None);
 }

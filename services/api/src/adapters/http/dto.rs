@@ -1,11 +1,17 @@
 use chrono::{DateTime, Utc};
+use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::application::auth::signup::AuthResponse as UseCaseAuthResponse;
-use crate::application::files::{CreateUploadOutput, DownloadFileOutput, ShareFileInput};
+use crate::application::files::{
+    CreateFolderInput, CreateUploadOutput, DownloadFileOutput, ShareFileInput, UpdateFileInput,
+    UpdateFolderInput,
+};
 use crate::domain::auth::User;
-use crate::domain::files::{DriveFile, FileShare, FileUser, SharedFile, UploadRequest};
+use crate::domain::files::{
+    DriveBrowse, DriveFile, FileShare, FileUser, Folder, FolderPathEntry, SharedFile, UploadRequest,
+};
 
 #[derive(Deserialize)]
 pub struct SignupRequest {
@@ -38,6 +44,7 @@ impl From<UseCaseAuthResponse> for AuthResponse {
 #[derive(Debug, Deserialize)]
 pub struct CreateUploadRequest {
     filename: String,
+    parent_folder_id: Option<Uuid>,
     content_type: String,
     size_bytes: i64,
     checksum_sha256: Option<String>,
@@ -47,6 +54,7 @@ impl From<CreateUploadRequest> for UploadRequest {
     fn from(request: CreateUploadRequest) -> Self {
         Self {
             filename: request.filename,
+            parent_folder_id: request.parent_folder_id,
             content_type: request.content_type,
             size_bytes: request.size_bytes,
             checksum_sha256: request.checksum_sha256,
@@ -77,12 +85,14 @@ impl From<CreateUploadOutput> for CreateUploadResponse {
 pub struct FileResponse {
     id: Uuid,
     filename: String,
+    parent_folder_id: Option<Uuid>,
     content_type: String,
     size_bytes: i64,
     checksum_sha256: Option<String>,
     object_key: String,
     state: String,
     created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
     completed_at: Option<DateTime<Utc>>,
     deleted_at: Option<DateTime<Utc>>,
 }
@@ -92,16 +102,151 @@ impl From<DriveFile> for FileResponse {
         Self {
             id: file.id,
             filename: file.filename,
+            parent_folder_id: file.parent_folder_id,
             content_type: file.content_type,
             size_bytes: file.size_bytes,
             checksum_sha256: file.checksum_sha256,
             object_key: file.object_key,
             state: file.state.as_str().to_string(),
             created_at: file.created_at,
+            updated_at: file.updated_at,
             completed_at: file.completed_at,
             deleted_at: file.deleted_at,
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateFolderRequest {
+    name: String,
+    parent_folder_id: Option<Uuid>,
+}
+
+impl From<CreateFolderRequest> for CreateFolderInput {
+    fn from(request: CreateFolderRequest) -> Self {
+        Self {
+            name: request.name,
+            parent_folder_id: request.parent_folder_id,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct FolderResponse {
+    id: Uuid,
+    name: String,
+    parent_folder_id: Option<Uuid>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    deleted_at: Option<DateTime<Utc>>,
+}
+
+impl From<Folder> for FolderResponse {
+    fn from(folder: Folder) -> Self {
+        Self {
+            id: folder.id,
+            name: folder.name,
+            parent_folder_id: folder.parent_folder_id,
+            created_at: folder.created_at,
+            updated_at: folder.updated_at,
+            deleted_at: folder.deleted_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct FolderPathEntryResponse {
+    id: Uuid,
+    name: String,
+}
+
+impl From<FolderPathEntry> for FolderPathEntryResponse {
+    fn from(entry: FolderPathEntry) -> Self {
+        Self {
+            id: entry.id,
+            name: entry.name,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct DriveBrowseResponse {
+    parent_folder_id: Option<Uuid>,
+    breadcrumbs: Vec<FolderPathEntryResponse>,
+    folders: Vec<FolderResponse>,
+    files: Vec<FileResponse>,
+}
+
+impl From<DriveBrowse> for DriveBrowseResponse {
+    fn from(browse: DriveBrowse) -> Self {
+        Self {
+            parent_folder_id: browse.parent_folder_id,
+            breadcrumbs: browse.breadcrumbs.into_iter().map(Into::into).collect(),
+            folders: browse.folders.into_iter().map(Into::into).collect(),
+            files: browse.files.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ListFoldersResponse {
+    folders: Vec<FolderResponse>,
+}
+
+impl From<Vec<Folder>> for ListFoldersResponse {
+    fn from(folders: Vec<Folder>) -> Self {
+        Self {
+            folders: folders.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BrowseDriveQuery {
+    pub parent_folder_id: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateFileRequest {
+    filename: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_nullable_uuid_patch_field")]
+    parent_folder_id: Option<Option<Uuid>>,
+}
+
+impl UpdateFileRequest {
+    pub fn into_input(self, file_id: Uuid) -> UpdateFileInput {
+        UpdateFileInput {
+            file_id,
+            filename: self.filename,
+            parent_folder_id: self.parent_folder_id,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateFolderRequest {
+    name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_nullable_uuid_patch_field")]
+    parent_folder_id: Option<Option<Uuid>>,
+}
+
+impl UpdateFolderRequest {
+    pub fn into_input(self, folder_id: Uuid) -> UpdateFolderInput {
+        UpdateFolderInput {
+            folder_id,
+            name: self.name,
+            parent_folder_id: self.parent_folder_id,
+        }
+    }
+}
+
+fn deserialize_nullable_uuid_patch_field<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<Uuid>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<Uuid>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Serialize)]

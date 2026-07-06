@@ -4,6 +4,14 @@ const FILENAME_MAX_CHARS: usize = 255;
 const CONTENT_TYPE_MAX_CHARS: usize = 255;
 
 pub fn validate_filename(filename: &str) -> Result<String, DomainError> {
+    validate_item_name(filename)
+}
+
+pub fn validate_folder_name(name: &str) -> Result<String, DomainError> {
+    validate_item_name(name)
+}
+
+fn validate_item_name(filename: &str) -> Result<String, DomainError> {
     let filename = filename.trim();
     let valid = !filename.is_empty()
         && filename.chars().count() <= FILENAME_MAX_CHARS

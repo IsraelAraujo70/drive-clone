@@ -1,5 +1,5 @@
 use axum::Router;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post};
 use tower_http::trace::TraceLayer;
 
 use crate::adapters::http::{auth_routes, file_routes};
@@ -15,6 +15,12 @@ pub fn build_router(state: AppState, cors: CorsConfig) -> Router {
         .route("/auth/login", post(auth_routes::login))
         .route("/auth/logout", post(auth_routes::logout))
         .route("/auth/me", get(auth_routes::me))
+        .route(
+            "/folders",
+            post(file_routes::create_folder).get(file_routes::list_folders),
+        )
+        .route("/drive", get(file_routes::browse_drive))
+        .route("/drive/trash", get(file_routes::list_drive_trash))
         .route("/files/uploads", post(file_routes::create_upload))
         .route("/files", get(file_routes::list_files))
         .route("/files/trash", get(file_routes::list_trash))
@@ -27,8 +33,19 @@ pub fn build_router(state: AppState, cors: CorsConfig) -> Router {
             post(file_routes::complete_upload),
         )
         .route("/files/{file_id}/download", get(file_routes::download_file))
-        .route("/files/{file_id}", delete(file_routes::delete_file))
+        .route(
+            "/files/{file_id}",
+            delete(file_routes::delete_file).patch(file_routes::update_file),
+        )
         .route("/files/{file_id}/restore", post(file_routes::restore_file))
+        .route(
+            "/folders/{folder_id}",
+            patch(file_routes::update_folder).delete(file_routes::delete_folder),
+        )
+        .route(
+            "/folders/{folder_id}/restore",
+            post(file_routes::restore_folder),
+        )
         .route(
             "/files/{file_id}/shares",
             post(file_routes::share_file).get(file_routes::list_shares),

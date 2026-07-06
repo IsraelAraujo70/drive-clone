@@ -1,21 +1,53 @@
 "use client"
 
 import * as React from "react"
+import { Moon, Sun } from "lucide-react"
+import { usePathname } from "next/navigation"
 import { ThemeProvider as NextThemesProvider, useTheme } from "next-themes"
+
+import { Button } from "@/components/ui/button"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import {
+  getNextTheme,
+  getThemeStorageKey,
+  isAppThemeRoute,
+} from "@/lib/theme"
+
+function subscribeMounted() {
+  return () => undefined
+}
+
+function getMountedSnapshot() {
+  return true
+}
+
+function getServerMountedSnapshot() {
+  return false
+}
 
 function ThemeProvider({
   children,
   ...props
 }: React.ComponentProps<typeof NextThemesProvider>) {
+  const pathname = usePathname()
+  const storageKey = getThemeStorageKey(pathname)
+  const appThemeRoute = isAppThemeRoute(pathname)
+
   return (
     <NextThemesProvider
+      key={storageKey}
       attribute="class"
       defaultTheme="system"
       enableSystem
+      storageKey={storageKey}
       disableTransitionOnChange
       {...props}
     >
-      <ThemeHotkey />
+      {appThemeRoute && <ThemeHotkey />}
       {children}
     </NextThemesProvider>
   )
@@ -55,7 +87,7 @@ function ThemeHotkey() {
         return
       }
 
-      setTheme(resolvedTheme === "dark" ? "light" : "dark")
+      setTheme(getNextTheme(resolvedTheme))
     }
 
     window.addEventListener("keydown", onKeyDown)
@@ -68,4 +100,36 @@ function ThemeHotkey() {
   return null
 }
 
-export { ThemeProvider }
+function ThemeToggleButton() {
+  const mounted = React.useSyncExternalStore(
+    subscribeMounted,
+    getMountedSnapshot,
+    getServerMountedSnapshot,
+  )
+  const { resolvedTheme, setTheme } = useTheme()
+
+  const nextTheme = getNextTheme(resolvedTheme)
+  const label =
+    nextTheme === "dark" ? "Switch to dark mode" : "Switch to light mode"
+  const Icon = resolvedTheme === "dark" ? Sun : Moon
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          aria-label={label}
+          disabled={!mounted}
+          onClick={() => setTheme(nextTheme)}
+        >
+          <Icon aria-hidden="true" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+export { ThemeProvider, ThemeToggleButton }

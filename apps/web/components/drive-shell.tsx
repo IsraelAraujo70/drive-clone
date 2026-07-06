@@ -30,6 +30,7 @@ import {
 
 import { AppSidebar, type DriveView } from "@/components/app-sidebar"
 import { CommandMenuProvider, useCommandMenu } from "@/components/command-menu"
+import { ThemeToggleButton } from "@/components/theme-provider"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -122,6 +123,7 @@ function DriveHeader({ user, onLogout }: { user: User; onLogout: () => void }) {
       <Separator orientation="vertical" className="mr-1 !h-6" />
       <HeaderSearch />
       <div className="ml-auto flex items-center gap-2">
+        <ThemeToggleButton />
         <Badge variant="outline" title={user.email}>
           {user.display_name}
         </Badge>

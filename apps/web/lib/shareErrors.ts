@@ -17,3 +17,10 @@ export function getShareErrorMessage(error: unknown, email: string): string {
   }
   return getApiErrorMessage(error)
 }
+
+export function getShareLinkErrorMessage(error: unknown): string {
+  if (error instanceof ApiError && error.status === 404) {
+    return "This link is no longer available. It may have been revoked, expired, or the file was deleted."
+  }
+  return getErrorMessage(error)
+}

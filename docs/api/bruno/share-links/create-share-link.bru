@@ -1,0 +1,41 @@
+meta {
+  name: Create Share Link
+  type: http
+  seq: 1
+}
+post {
+  url: {{baseUrl}}/files/{{fileId}}/share-links
+  body: json
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "expires_in_seconds": null
+  }
+}
+
+tests {
+  if (res.body && res.body.id) {
+    bru.setVar('shareLinkId', res.body.id);
+  }
+  if (res.body && res.body.token) {
+    bru.setVar('shareLinkToken', res.body.token);
+  }
+
+  test("response status is documented", function() {
+    expect([201, 401, 404, 422]).to.include(res.status);
+  });
+}
+
+docs {
+  Owner-only. Creates a public, revocable read-only link to a single complete file. Set expires_in_seconds to a positive integer for an expiring link, or null for one that never expires; <= 0 returns validation_error. The plaintext token is returned only here.
+}

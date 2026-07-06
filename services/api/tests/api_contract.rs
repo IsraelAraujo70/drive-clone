@@ -974,6 +974,7 @@ async fn create_upload_validates_size_and_quota(pool: PgPool) {
         Arc::new(FakeObjectStorage::default()),
         5,
         900,
+        "http://localhost:3000".to_string(),
     ));
     let (status, body) = request(
         app,
@@ -1202,4 +1203,202 @@ async fn private_files_do_not_leak_to_other_users(pool: PgPool) {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(body["download_url"].as_str().unwrap().contains(object_key));
+}
+
+#[sqlx::test]
+async fn share_link_public_download_works_and_hides_revoked_expired_or_trashed(pool: PgPool) {
+    let storage = Arc::new(FakeObjectStorage::default());
+    let app = app_with_storage(pool.clone(), storage.clone());
+    let owner_token = signup(app.clone(), "link-owner@example.com").await;
+    let other_token = signup(app.clone(), "link-other@example.com").await;
+    let (file_id, object_key) =
+        create_completed_file(app.clone(), storage.clone(), &owner_token, 21).await;
+
+    // Non-owner cannot create a link.
+    let (status, body) = request(
+        app.clone(),
+        "POST",
+        &format!("/files/{file_id}/share-links"),
+        Some(&other_token),
+        Some(json!({ "expires_in_seconds": null })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "file_not_found");
+
+    // expires_in_seconds <= 0 → 422 validation.
+    let (status, body) = request(
+        app.clone(),
+        "POST",
+        &format!("/files/{file_id}/share-links"),
+        Some(&owner_token),
+        Some(json!({ "expires_in_seconds": 0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"], "validation_error");
+
+    // Owner creates a non-expiring link.
+    let (status, created) = request(
+        app.clone(),
+        "POST",
+        &format!("/files/{file_id}/share-links"),
+        Some(&owner_token),
+        Some(json!({ "expires_in_seconds": null })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let token = created["token"].as_str().unwrap().to_string();
+    let link_id = created["id"].as_str().unwrap().to_string();
+    assert!(
+        created["url"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("/s/{token}"))
+    );
+    assert_eq!(created["expires_at"], Value::Null);
+
+    // Public, unauthenticated resolve returns metadata + working download url.
+    let (status, body) = request(
+        app.clone(),
+        "GET",
+        &format!("/shared/links/{token}"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["filename"], "report.txt");
+    assert_eq!(body["size_bytes"], 21);
+    assert_eq!(body["content_type"], "text/plain");
+    assert!(body["download_url"].as_str().unwrap().contains(&object_key));
+
+    // Owner lists links, no token exposed.
+    let (status, body) = request(
+        app.clone(),
+        "GET",
+        &format!("/files/{file_id}/share-links"),
+        Some(&owner_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["links"].as_array().unwrap().len(), 1);
+    assert_eq!(body["links"][0]["id"], link_id);
+    assert!(body["links"][0].get("token").is_none());
+
+    // Non-owner cannot list.
+    let (status, body) = request(
+        app.clone(),
+        "GET",
+        &format!("/files/{file_id}/share-links"),
+        Some(&other_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "file_not_found");
+
+    // Wrong token → uniform 404.
+    let (status, body) = request(
+        app.clone(),
+        "GET",
+        "/shared/links/not-a-real-token",
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "file_not_found");
+
+    // Non-owner cannot revoke.
+    let (status, _) = request(
+        app.clone(),
+        "DELETE",
+        &format!("/files/{file_id}/share-links/{link_id}"),
+        Some(&other_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Owner revokes → resolve becomes 404.
+    let (status, _) = request(
+        app.clone(),
+        "DELETE",
+        &format!("/files/{file_id}/share-links/{link_id}"),
+        Some(&owner_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, body) = request(
+        app.clone(),
+        "GET",
+        &format!("/shared/links/{token}"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "file_not_found");
+
+    // Expired link → 404. Create a fresh link, force its expiry into the past.
+    let (status, created) = request(
+        app.clone(),
+        "POST",
+        &format!("/files/{file_id}/share-links"),
+        Some(&owner_token),
+        Some(json!({ "expires_in_seconds": 3600 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let expired_token = created["token"].as_str().unwrap().to_string();
+    let expired_id = Uuid::parse_str(created["id"].as_str().unwrap()).unwrap();
+    sqlx::query("UPDATE share_links SET expires_at = now() - interval '1 hour' WHERE id = $1")
+        .bind(expired_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (status, body) = request(
+        app.clone(),
+        "GET",
+        &format!("/shared/links/{expired_token}"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "file_not_found");
+
+    // Trashed file → 404 even for a valid, unrevoked link.
+    let (status, created) = request(
+        app.clone(),
+        "POST",
+        &format!("/files/{file_id}/share-links"),
+        Some(&owner_token),
+        Some(json!({ "expires_in_seconds": null })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let live_token = created["token"].as_str().unwrap().to_string();
+    let (status, _) = request(
+        app.clone(),
+        "DELETE",
+        &format!("/files/{file_id}"),
+        Some(&owner_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, body) = request(
+        app,
+        "GET",
+        &format!("/shared/links/{live_token}"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "file_not_found");
 }

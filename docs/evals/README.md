@@ -78,6 +78,16 @@ API_BASE_URL=https://api-production-bcad4.up.railway.app bash docs/evals/share-d
 
 Two fresh accounts exercise the full access-control flow: private-by-default download denial, share validations (unknown email 404, self-share 422, idempotent re-share), shared-with-me listing with owner info, grantee download with byte comparison, soft delete (owner list, trash, grantee access all react), restore, and revoke.
 
+## Share Link Smoke
+
+Runs against any live API (local stack or production):
+
+```bash
+API_BASE_URL=https://api-production-bcad4.up.railway.app bash docs/evals/share-link-smoke.sh
+```
+
+Two fresh accounts exercise public revocable links: non-owner create denial (404), non-positive expiry rejection (422), owner create returns a one-time token and `{PUBLIC_WEB_URL}/s/{token}` url, unauthenticated resolve with byte-compared download, owner list without the token, non-owner list denial, wrong-token 404, revoke then uniform 404, a 1-second link that lapses to 404, and a live link that 404s once the file is trashed.
+
 ## Folder Organization Smoke
 
 Runs against any live API (local stack or production):

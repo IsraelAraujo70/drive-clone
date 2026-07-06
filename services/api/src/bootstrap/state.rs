@@ -6,11 +6,12 @@ use crate::adapters::postgres::{PostgresAuthRepository, PostgresFileRepository};
 use crate::application::auth::{GetCurrentUserUseCase, LoginUseCase, LogoutUseCase, SignupUseCase};
 use crate::application::files::{
     BrowseFolderUseCase, CompleteUploadUseCase, CreateFolderUseCase, CreateResumableUploadUseCase,
-    CreateUploadUseCase, DeleteFileUseCase, DeleteFolderUseCase, DownloadFileUseCase,
-    ExpireResumableUploadsUseCase, FinalizeResumableUploadUseCase, GetUploadStatusUseCase,
-    ListDriveTrashUseCase, ListFilesUseCase, ListFoldersUseCase, ListSharedWithMeUseCase,
-    ListSharesUseCase, ListTrashUseCase, PresignUploadPartUseCase, RecordUploadPartUseCase,
-    RestoreFileUseCase, RestoreFolderUseCase, RevokeShareUseCase, SearchFilesUseCase,
+    CreateShareLinkUseCase, CreateUploadUseCase, DeleteFileUseCase, DeleteFolderUseCase,
+    DownloadFileUseCase, ExpireResumableUploadsUseCase, FinalizeResumableUploadUseCase,
+    GetUploadStatusUseCase, ListDriveTrashUseCase, ListFilesUseCase, ListFoldersUseCase,
+    ListShareLinksUseCase, ListSharedWithMeUseCase, ListSharesUseCase, ListTrashUseCase,
+    PresignUploadPartUseCase, RecordUploadPartUseCase, ResolveShareLinkUseCase, RestoreFileUseCase,
+    RestoreFolderUseCase, RevokeShareLinkUseCase, RevokeShareUseCase, SearchFilesUseCase,
     ShareFileUseCase, UpdateFileUseCase, UpdateFolderUseCase,
 };
 use crate::application::ports::auth::AuthRepository;
@@ -52,6 +53,10 @@ pub struct AppState {
     pub list_shares: ListSharesUseCase,
     pub revoke_share: RevokeShareUseCase,
     pub list_shared_with_me: ListSharedWithMeUseCase,
+    pub create_share_link: CreateShareLinkUseCase,
+    pub list_share_links: ListShareLinksUseCase,
+    pub revoke_share_link: RevokeShareLinkUseCase,
+    pub resolve_share_link: ResolveShareLinkUseCase,
 }
 
 impl AppState {
@@ -60,6 +65,7 @@ impl AppState {
         storage: Arc<dyn ObjectStorage>,
         max_file_size_bytes: i64,
         presigned_url_ttl_seconds: i64,
+        public_web_url: String,
     ) -> Self {
         let auth_repository: Arc<dyn AuthRepository> =
             Arc::new(PostgresAuthRepository::new(pool.clone()));
@@ -84,7 +90,7 @@ impl AppState {
             create_resumable_upload: CreateResumableUploadUseCase::new(
                 file_repository.clone(),
                 storage.clone(),
-                id_generator,
+                id_generator.clone(),
                 clock.clone(),
                 max_file_size_bytes,
                 presigned_url_ttl_seconds,
@@ -126,6 +132,20 @@ impl AppState {
             list_shares: ListSharesUseCase::new(file_repository.clone()),
             revoke_share: RevokeShareUseCase::new(file_repository.clone()),
             list_shared_with_me: ListSharedWithMeUseCase::new(file_repository.clone()),
+            create_share_link: CreateShareLinkUseCase::new(
+                file_repository.clone(),
+                id_generator,
+                clock.clone(),
+                public_web_url,
+            ),
+            list_share_links: ListShareLinksUseCase::new(file_repository.clone()),
+            revoke_share_link: RevokeShareLinkUseCase::new(file_repository.clone(), clock.clone()),
+            resolve_share_link: ResolveShareLinkUseCase::new(
+                file_repository.clone(),
+                storage.clone(),
+                clock,
+                presigned_url_ttl_seconds,
+            ),
             update_file: UpdateFileUseCase::new(file_repository.clone()),
             update_folder: UpdateFolderUseCase::new(file_repository.clone()),
             download_file: DownloadFileUseCase::new(

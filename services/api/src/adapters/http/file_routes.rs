@@ -7,12 +7,13 @@ use uuid::Uuid;
 use crate::adapters::http::auth_extractor::AuthenticatedUser;
 use crate::adapters::http::dto::{
     BrowseDriveQuery, CreateFolderRequest, CreateResumableUploadRequest,
-    CreateResumableUploadResponse, CreateUploadRequest, CreateUploadResponse, DownloadResponse,
-    DriveBrowseResponse, ExpireUploadsResponse, FileResponse, FileShareResponse, FolderResponse,
-    ListFilesResponse, ListFoldersResponse, ListSharedWithMeResponse, ListSharesResponse,
-    PresignUploadPartRequest, PresignUploadPartResponse, RecordUploadPartRequest, SearchFilesQuery,
-    SearchFilesResponse, ShareFileRequest, UpdateFileRequest, UpdateFolderRequest,
-    UploadPartResponse, UploadStatusResponse,
+    CreateResumableUploadResponse, CreateShareLinkRequest, CreateShareLinkResponse,
+    CreateUploadRequest, CreateUploadResponse, DownloadResponse, DriveBrowseResponse,
+    ExpireUploadsResponse, FileResponse, FileShareResponse, FolderResponse, ListFilesResponse,
+    ListFoldersResponse, ListShareLinksResponse, ListSharedWithMeResponse, ListSharesResponse,
+    PresignUploadPartRequest, PresignUploadPartResponse, PublicShareLinkResponse,
+    RecordUploadPartRequest, SearchFilesQuery, SearchFilesResponse, ShareFileRequest,
+    UpdateFileRequest, UpdateFolderRequest, UploadPartResponse, UploadStatusResponse,
 };
 use crate::adapters::http::error::HttpError;
 use crate::bootstrap::state::AppState;
@@ -289,4 +290,50 @@ pub async fn list_shared_with_me(
 ) -> Result<Json<ListSharedWithMeResponse>, HttpError> {
     let files = state.list_shared_with_me.execute(&auth.user).await?;
     Ok(Json(ListSharedWithMeResponse::from(files)))
+}
+
+pub async fn create_share_link(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(file_id): Path<Uuid>,
+    Json(request): Json<CreateShareLinkRequest>,
+) -> Result<impl IntoResponse, HttpError> {
+    let output = state
+        .create_share_link
+        .execute(&auth.user, request.into_input(file_id))
+        .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateShareLinkResponse::from(output)),
+    ))
+}
+
+pub async fn list_share_links(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(file_id): Path<Uuid>,
+) -> Result<Json<ListShareLinksResponse>, HttpError> {
+    let links = state.list_share_links.execute(&auth.user, file_id).await?;
+    Ok(Json(ListShareLinksResponse::from(links)))
+}
+
+pub async fn revoke_share_link(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path((file_id, link_id)): Path<(Uuid, Uuid)>,
+) -> Result<impl IntoResponse, HttpError> {
+    state
+        .revoke_share_link
+        .execute(&auth.user, file_id, link_id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// Public, unauthenticated. Uniform 404 for every failure mode.
+pub async fn resolve_share_link(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+) -> Result<Json<PublicShareLinkResponse>, HttpError> {
+    let output = state.resolve_share_link.execute(&token).await?;
+    Ok(Json(PublicShareLinkResponse::from(output)))
 }

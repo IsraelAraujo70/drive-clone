@@ -75,3 +75,10 @@ describe("loadPublicShareLink", () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })
+
+describe("share link routes", () => {
+  it("supports links generated below the /drive base path", async () => {
+    const route = await import("../app/drive/s/[token]/page")
+    expect(route.default).toBeTypeOf("function")
+  })
+})

@@ -5,16 +5,16 @@ use uuid::Uuid;
 
 use crate::application::auth::signup::AuthResponse as UseCaseAuthResponse;
 use crate::application::files::{
-    CreateFolderInput, CreateResumableUploadOutput, CreateUploadOutput, DownloadFileOutput,
-    ExpireUploadsOutput, PresignUploadPartInput, PresignUploadPartOutput, RecordUploadPartInput,
-    SearchFilesInput, ShareFileInput, SyncChangesInput, SyncChangesOutput, UpdateFileInput,
-    UpdateFolderInput,
+    CreateFolderInput, CreateResumableUploadOutput, CreateShareLinkInput, CreateShareLinkOutput,
+    CreateUploadOutput, DownloadFileOutput, ExpireUploadsOutput, PresignUploadPartInput,
+    PresignUploadPartOutput, RecordUploadPartInput, ResolveShareLinkOutput, SearchFilesInput,
+    ShareFileInput, SyncChangesInput, SyncChangesOutput, UpdateFileInput, UpdateFolderInput,
 };
 use crate::domain::auth::User;
 use crate::domain::files::{
     ChangeLogEntry, DriveBrowse, DriveFile, FileShare, FileUser, Folder, FolderPathEntry,
-    PendingUpload, ResumableUploadRequest, ResumableUploadSession, SearchFileResult, SharedFile,
-    UploadPart, UploadRequest,
+    PendingUpload, ResumableUploadRequest, ResumableUploadSession, SearchFileResult, ShareLink,
+    SharedFile, UploadPart, UploadRequest,
 };
 
 #[derive(Deserialize)]
@@ -583,6 +583,91 @@ impl From<SharedFile> for SharedFileResponse {
         Self {
             file: shared.file.into(),
             owner: shared.owner.into(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateShareLinkRequest {
+    #[serde(default)]
+    expires_in_seconds: Option<i64>,
+}
+
+impl CreateShareLinkRequest {
+    pub fn into_input(self, file_id: Uuid) -> CreateShareLinkInput {
+        CreateShareLinkInput {
+            file_id,
+            expires_in_seconds: self.expires_in_seconds,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreateShareLinkResponse {
+    id: Uuid,
+    token: String,
+    url: String,
+    expires_at: Option<DateTime<Utc>>,
+}
+
+impl From<CreateShareLinkOutput> for CreateShareLinkResponse {
+    fn from(output: CreateShareLinkOutput) -> Self {
+        Self {
+            id: output.id,
+            token: output.token,
+            url: output.url,
+            expires_at: output.expires_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ShareLinkResponse {
+    id: Uuid,
+    created_at: DateTime<Utc>,
+    expires_at: Option<DateTime<Utc>>,
+    revoked_at: Option<DateTime<Utc>>,
+}
+
+impl From<ShareLink> for ShareLinkResponse {
+    fn from(link: ShareLink) -> Self {
+        Self {
+            id: link.id,
+            created_at: link.created_at,
+            expires_at: link.expires_at,
+            revoked_at: link.revoked_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ListShareLinksResponse {
+    links: Vec<ShareLinkResponse>,
+}
+
+impl From<Vec<ShareLink>> for ListShareLinksResponse {
+    fn from(links: Vec<ShareLink>) -> Self {
+        Self {
+            links: links.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct PublicShareLinkResponse {
+    filename: String,
+    size_bytes: i64,
+    content_type: String,
+    download_url: String,
+}
+
+impl From<ResolveShareLinkOutput> for PublicShareLinkResponse {
+    fn from(output: ResolveShareLinkOutput) -> Self {
+        Self {
+            filename: output.filename,
+            size_bytes: output.size_bytes,
+            content_type: output.content_type,
+            download_url: output.download_url,
         }
     }
 }

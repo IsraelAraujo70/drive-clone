@@ -6,14 +6,14 @@ use uuid::Uuid;
 use crate::adapters::postgres::tx::map_sqlx_error;
 use crate::application::ports::RepositoryError;
 use crate::application::ports::files::{
-    CreateFolderRecord, CreatePendingFileRecord, CreateResumableUploadRecord, ExpiredUploadRecord,
-    FileRepository, RecordUploadPartRecord, SearchFilesRecord, UpdateFileRecord,
-    UpdateFolderRecord,
+    CreateFolderRecord, CreatePendingFileRecord, CreateResumableUploadRecord,
+    CreateShareLinkRecord, ExpiredUploadRecord, FileRepository, RecordUploadPartRecord,
+    SearchFilesRecord, UpdateFileRecord, UpdateFolderRecord,
 };
 use crate::domain::files::{
     ChangeEntityType, ChangeLogEntry, ChangeOp, DriveBrowse, DriveFile, FileShare, FileState,
-    FileUser, Folder, FolderPathEntry, PendingFile, PendingUpload, ResumableUploadSession,
-    SearchAccess, SearchFileResult, SharedFile, UploadPart,
+    FileUser, Folder, FolderPathEntry, PendingFile, PendingUpload, PublicShareTarget,
+    ResumableUploadSession, SearchAccess, SearchFileResult, ShareLink, SharedFile, UploadPart,
 };
 
 #[derive(Debug, Clone)]
@@ -333,6 +333,46 @@ impl From<FileShareRow> for FileShare {
                 display_name: row.grantee_display_name,
             },
             created_at: row.created_at,
+        }
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct ShareLinkRow {
+    id: Uuid,
+    file_id: Uuid,
+    created_at: DateTime<Utc>,
+    expires_at: Option<DateTime<Utc>>,
+    revoked_at: Option<DateTime<Utc>>,
+}
+
+impl From<ShareLinkRow> for ShareLink {
+    fn from(row: ShareLinkRow) -> Self {
+        Self {
+            id: row.id,
+            file_id: row.file_id,
+            created_at: row.created_at,
+            expires_at: row.expires_at,
+            revoked_at: row.revoked_at,
+        }
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct PublicShareTargetRow {
+    filename: String,
+    size_bytes: i64,
+    content_type: String,
+    object_key: String,
+}
+
+impl From<PublicShareTargetRow> for PublicShareTarget {
+    fn from(row: PublicShareTargetRow) -> Self {
+        Self {
+            filename: row.filename,
+            size_bytes: row.size_bytes,
+            content_type: row.content_type,
+            object_key: row.object_key,
         }
     }
 }
@@ -1663,6 +1703,134 @@ impl FileRepository for PostgresFileRepository {
         .fetch_all(&self.pool)
         .await
         .map(|rows| rows.into_iter().map(Into::into).collect())
+        .map_err(map_sqlx_error)
+    }
+
+    async fn create_share_link(
+        &self,
+        input: CreateShareLinkRecord,
+    ) -> Result<ShareLink, RepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                 SELECT 1 FROM files
+                 WHERE id = $1 AND owner_id = $2 AND state = 'complete' AND deleted_at IS NULL
+             )",
+        )
+        .bind(input.file_id)
+        .bind(input.owner_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        if !exists {
+            return Err(RepositoryError::NotFound);
+        }
+
+        let link = sqlx::query_as::<_, ShareLinkRow>(
+            "INSERT INTO share_links (id, file_id, created_by, token_hash, expires_at)
+             VALUES ($1, $2, $3, $4, $5)
+             RETURNING id, file_id, created_at, expires_at, revoked_at",
+        )
+        .bind(input.id)
+        .bind(input.file_id)
+        .bind(input.owner_id)
+        .bind(input.token_hash)
+        .bind(input.expires_at)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(link.into())
+    }
+
+    async fn list_share_links(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+    ) -> Result<Vec<ShareLink>, RepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let owned: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM files WHERE id = $1 AND owner_id = $2)",
+        )
+        .bind(file_id)
+        .bind(owner_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        if !owned {
+            return Err(RepositoryError::NotFound);
+        }
+
+        let links = sqlx::query_as::<_, ShareLinkRow>(
+            "SELECT id, file_id, created_at, expires_at, revoked_at
+             FROM share_links
+             WHERE file_id = $1
+             ORDER BY created_at DESC, id DESC",
+        )
+        .bind(file_id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(links.into_iter().map(Into::into).collect())
+    }
+
+    async fn revoke_share_link(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+        link_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<(), RepositoryError> {
+        let result = sqlx::query(
+            "UPDATE share_links sl
+             SET revoked_at = $4
+             FROM files f
+             WHERE sl.id = $1
+               AND sl.file_id = $2
+               AND f.id = sl.file_id
+               AND f.owner_id = $3
+               AND sl.revoked_at IS NULL",
+        )
+        .bind(link_id)
+        .bind(file_id)
+        .bind(owner_id)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        if result.rows_affected() == 0 {
+            Err(RepositoryError::NotFound)
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn resolve_share_link(
+        &self,
+        token_hash: &[u8],
+        now: DateTime<Utc>,
+    ) -> Result<Option<PublicShareTarget>, RepositoryError> {
+        sqlx::query_as::<_, PublicShareTargetRow>(
+            "SELECT f.filename, f.size_bytes, f.content_type, f.object_key
+             FROM share_links sl
+             JOIN files f ON f.id = sl.file_id
+             WHERE sl.token_hash = $1
+               AND sl.revoked_at IS NULL
+               AND (sl.expires_at IS NULL OR sl.expires_at > $2)
+               AND f.state = 'complete'
+               AND f.deleted_at IS NULL",
+        )
+        .bind(token_hash)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(Into::into))
         .map_err(map_sqlx_error)
     }
 }

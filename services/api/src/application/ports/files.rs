@@ -4,8 +4,17 @@ use uuid::Uuid;
 use crate::application::ports::RepositoryError;
 use crate::domain::files::{
     ChangeLogEntry, DriveBrowse, DriveFile, FileShare, Folder, PendingFile, PendingUpload,
-    ResumableUploadSession, SearchFileResult, SharedFile, UploadPart,
+    PublicShareTarget, ResumableUploadSession, SearchFileResult, ShareLink, SharedFile, UploadPart,
 };
+
+#[derive(Debug, Clone)]
+pub struct CreateShareLinkRecord {
+    pub id: Uuid,
+    pub owner_id: Uuid,
+    pub file_id: Uuid,
+    pub token_hash: Vec<u8>,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+}
 
 #[derive(Debug, Clone)]
 pub struct CreatePendingFileRecord {
@@ -242,4 +251,29 @@ pub trait FileRepository: Send + Sync {
         after_seq: i64,
         limit: i64,
     ) -> Result<Vec<ChangeLogEntry>, RepositoryError>;
+
+    async fn create_share_link(
+        &self,
+        input: CreateShareLinkRecord,
+    ) -> Result<ShareLink, RepositoryError>;
+
+    async fn list_share_links(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+    ) -> Result<Vec<ShareLink>, RepositoryError>;
+
+    async fn revoke_share_link(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+        link_id: Uuid,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), RepositoryError>;
+
+    async fn resolve_share_link(
+        &self,
+        token_hash: &[u8],
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Option<PublicShareTarget>, RepositoryError>;
 }

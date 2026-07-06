@@ -11,6 +11,7 @@ import {
 import { useRouter } from "next/navigation"
 import {
   AlertCircle,
+  Check,
   ChevronRight,
   Download,
   FileIcon,
@@ -18,6 +19,7 @@ import {
   FolderPlus,
   FolderOpen,
   Inbox,
+  Link2,
   MoreHorizontal,
   MoveRight,
   Pencil,
@@ -89,6 +91,7 @@ import {
   type FolderPathEntry,
   type FolderRecord,
   type Share,
+  type ShareLinkRecord,
   type SharedFileRecord,
   type User,
 } from "@/lib/api"
@@ -217,23 +220,34 @@ function ShareDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const [shares, setShares] = useState<Share[]>([])
+  const [links, setLinks] = useState<ShareLinkRecord[]>([])
   const [email, setEmail] = useState("")
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [revokeId, setRevokeId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [creatingLink, setCreatingLink] = useState(false)
+  const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null)
+  const [revokeLinkId, setRevokeLinkId] = useState<string | null>(null)
+  const [linkError, setLinkError] = useState<string | null>(null)
 
   const loadShares = useCallback(async () => {
     if (!token || !file) {
       setShares([])
+      setLinks([])
       return
     }
 
     setLoading(true)
     setError(null)
+    setLinkError(null)
     try {
-      const response = await api.listShares(token, file.id)
-      setShares(response.shares)
+      const [shareResponse, linkResponse] = await Promise.all([
+        api.listShares(token, file.id),
+        api.listShareLinks(token, file.id),
+      ])
+      setShares(shareResponse.shares)
+      setLinks(linkResponse.links.filter((link) => link.revoked_at === null))
     } catch (caught) {
       setError(getApiErrorMessage(caught))
     } finally {
@@ -260,8 +274,62 @@ function ShareDialog({
       setEmail("")
       setError(null)
       setShares([])
+      setLinks([])
+      setLinkError(null)
+      setCopiedLinkId(null)
     }
     onOpenChange(nextOpen)
+  }
+
+  async function handleCreateLink() {
+    if (!token || !file) {
+      setLinkError("Your session expired. Log in again to create a link.")
+      return
+    }
+
+    setCreatingLink(true)
+    setLinkError(null)
+    try {
+      const created = await api.createShareLink(token, file.id)
+      setLinks((current) => [
+        {
+          id: created.id,
+          created_at: new Date().toISOString(),
+          expires_at: created.expires_at,
+          revoked_at: null,
+        },
+        ...current,
+      ])
+      try {
+        await navigator.clipboard.writeText(created.url)
+        setCopiedLinkId(created.id)
+      } catch {
+        // Clipboard can be blocked; the link still exists and is listed.
+        setCopiedLinkId(null)
+      }
+    } catch (caught) {
+      setLinkError(getApiErrorMessage(caught))
+    } finally {
+      setCreatingLink(false)
+    }
+  }
+
+  async function handleRevokeLink(linkId: string) {
+    if (!token || !file) {
+      setLinkError("Your session expired. Log in again to revoke a link.")
+      return
+    }
+
+    setRevokeLinkId(linkId)
+    setLinkError(null)
+    try {
+      await api.revokeShareLink(token, file.id, linkId)
+      setLinks((current) => current.filter((link) => link.id !== linkId))
+    } catch (caught) {
+      setLinkError(getApiErrorMessage(caught))
+    } finally {
+      setRevokeLinkId(null)
+    }
   }
 
   async function handleShare(event: FormEvent<HTMLFormElement>) {
@@ -377,6 +445,82 @@ function ShareDialog({
                   disabled={revokeId === share.grantee.id}
                 >
                   {revokeId === share.grantee.id && (
+                    <Spinner data-icon="inline-start" />
+                  )}
+                  Revoke
+                </Button>
+              </div>
+            ))
+          )}
+        </div>
+
+        <Separator />
+
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <div className="text-sm font-medium">Public link</div>
+              <p className="text-xs text-muted-foreground">
+                Anyone with the link can download this file until you revoke it.
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void handleCreateLink()}
+              disabled={creatingLink || !file}
+            >
+              {creatingLink ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <Link2 data-icon="inline-start" />
+              )}
+              Create link
+            </Button>
+          </div>
+
+          {linkError && (
+            <p className="text-sm text-destructive" role="alert">
+              {linkError}
+            </p>
+          )}
+
+          {links.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No public links yet.
+            </p>
+          ) : (
+            links.map((link) => (
+              <div
+                key={link.id}
+                className="flex items-center gap-3 rounded-lg border border-border p-3"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium">
+                    {copiedLinkId === link.id ? (
+                      <span className="flex items-center gap-1 text-emerald-600">
+                        <Check className="size-3.5" aria-hidden />
+                        Copied to clipboard
+                      </span>
+                    ) : (
+                      "Public download link"
+                    )}
+                  </div>
+                  <div className="truncate text-xs text-muted-foreground">
+                    {link.expires_at
+                      ? `Expires ${new Date(link.expires_at).toLocaleString()}`
+                      : "No expiration"}
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handleRevokeLink(link.id)}
+                  disabled={revokeLinkId === link.id}
+                >
+                  {revokeLinkId === link.id && (
                     <Spinner data-icon="inline-start" />
                   )}
                   Revoke

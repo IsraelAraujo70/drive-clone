@@ -637,7 +637,87 @@ Response `200`:
 - `upsert` of a folder embeds a `folder` snapshot (`id`, `name`,
   `parent_folder_id`, `updated_at`) instead of `file`. Tombstones omit both.
 
+## Share links (public, revocable)
+
+Tokenized read-only links to a single file, separate from the registered-user
+email grants above. The token is 32 random bytes, base64url encoded. Only its
+SHA-256 hash is stored, so a database dump never yields working links. The
+plaintext token is returned exactly once, in the creation response.
+
+### POST /files/{file_id}/share-links
+
+Owner-only. File must be `complete` and not deleted.
+
+Request (the field is optional; omit or send `null` for a link that never
+expires):
+
+```json
+{ "expires_in_seconds": 604800 }
+```
+
+Rules:
+
+- Non-owner (or unknown/incomplete/deleted file) → `404 file_not_found`.
+- `expires_in_seconds` present and `<= 0` → `422 validation_error`.
+
+Response `201`:
+
+```json
+{
+  "id": "3b1e...",
+  "token": "n0Hh...urlsafe-token...",
+  "url": "https://app.example.com/s/n0Hh...urlsafe-token...",
+  "expires_at": "2026-07-13T12:00:00Z"
+}
+```
+
+`url` is built from the `PUBLIC_WEB_URL` env var as `{PUBLIC_WEB_URL}/s/{token}`.
+`expires_at` is `null` for a non-expiring link.
+
+### GET /files/{file_id}/share-links
+
+Owner-only. Lists the file's links without the token. Non-owner →
+`404 file_not_found`.
+
+Response `200`:
+
+```json
+{
+  "links": [
+    { "id": "3b1e...", "created_at": "...", "expires_at": "2026-07-13T12:00:00Z", "revoked_at": null }
+  ]
+}
+```
+
+### DELETE /files/{file_id}/share-links/{link_id}
+
+Owner-only. Sets `revoked_at`; the row is kept for audit. Unknown or
+already-revoked link → `404 file_not_found`.
+
+Response: `204 No Content`.
+
+### GET /shared/links/{token}
+
+Public, **unauthenticated**. Resolves a valid link to the file metadata plus a
+short-lived presigned download URL.
+
+A link resolves only when the token hash matches, the link is not revoked, it is
+not expired, and the file is `complete` and not deleted. Every failure mode
+(bad token, revoked, expired, trashed file) returns the same
+`404 file_not_found` so the endpoint cannot be used as an oracle.
+
+Response `200`:
+
+```json
+{
+  "filename": "report.pdf",
+  "size_bytes": 12345,
+  "content_type": "application/pdf",
+  "download_url": "https://storage.example/objects/...presigned..."
+}
+```
+
 ## Future Contracts
 
-- Share links: revocable tokenized links separate from the current registered
-  user email grants.
+- Share links: password protection, folder links, and write-capable links are
+  deliberately out of scope for the current read-only, single-file link.

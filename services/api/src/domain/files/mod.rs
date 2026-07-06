@@ -1,5 +1,6 @@
 pub mod file;
 pub mod quota;
+pub mod share_link;
 pub mod upload;
 pub mod validators;
 
@@ -9,6 +10,7 @@ pub use file::{
     SearchAccess, SearchFileResult, SharedFile, UploadPart,
 };
 pub use quota::ensure_quota;
+pub use share_link::{PublicShareTarget, ShareLink, generate_share_token, hash_share_token};
 pub use upload::{ResumableUploadRequest, UploadRequest};
 pub use validators::{
     validate_checksum, validate_content_type, validate_filename, validate_folder_name,

@@ -1,0 +1,23 @@
+meta {
+  name: Resolve Public Link
+  type: http
+  seq: 4
+}
+get {
+  url: {{baseUrl}}/shared/links/{{shareLinkToken}}
+  body: none
+  auth: none
+}
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([200, 404]).to.include(res.status);
+  });
+}
+
+docs {
+  Public, unauthenticated. Resolves a valid token to filename, size_bytes, content_type, and a presigned download_url. Any failure (bad token, revoked, expired, trashed file) returns a uniform 404 file_not_found.
+}

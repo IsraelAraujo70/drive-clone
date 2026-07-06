@@ -25,6 +25,7 @@ pub fn app_with_storage(pool: PgPool, storage: Arc<dyn ObjectStorage>) -> Router
         config.max_file_size_bytes,
         config.presigned_url_ttl_seconds,
         config.resumable_upload_ttl_seconds,
+        config.public_web_url,
     );
     app_with_state(state)
 }

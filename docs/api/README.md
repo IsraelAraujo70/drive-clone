@@ -751,8 +751,8 @@ Response `200`:
 ## Shares
 
 Sharing is file-level view/download permission by registered user email. Files
-are private by default. Public or tokenized share links are not part of the
-current API contract.
+are private by default. Public tokenized links are documented under
+[Share Links](#share-links) below.
 
 ### `POST /files/{file_id}/shares`
 
@@ -800,10 +800,81 @@ Responses:
 - `204`
 - `404 file_not_found`
 
+## Share Links
+
+Read-only, revocable public links to a single file. The token is 32 random
+bytes (base64url); only its SHA-256 hash is stored. The plaintext token is
+returned once, in the creation response. Links reuse the existing presigned
+download flow, so they need no authentication to download.
+
+### `POST /files/{file_id}/share-links`
+
+Authenticated owner-only. File must be complete and active.
+
+Request (`expires_in_seconds` is optional; `null` or omitted → never expires):
+
+```json
+{ "expires_in_seconds": 604800 }
+```
+
+Rules:
+
+- Non-owner / unknown / incomplete / deleted file → `404 file_not_found`.
+- `expires_in_seconds` present and `<= 0` → `422 validation_error`.
+
+Response `201`:
+
+```json
+{
+  "id": "uuid",
+  "token": "urlsafe-token",
+  "url": "https://app.example.com/s/urlsafe-token",
+  "expires_at": "2026-07-13T12:00:00Z"
+}
+```
+
+`url` = `{PUBLIC_WEB_URL}/s/{token}`. `expires_at` is `null` for a
+non-expiring link.
+
+### `GET /files/{file_id}/share-links`
+
+Authenticated owner-only. Lists the file's links without tokens.
+
+Response `200`:
+
+```json
+{ "links": [ { "id": "uuid", "created_at": "...", "expires_at": "...", "revoked_at": null } ] }
+```
+
+### `DELETE /files/{file_id}/share-links/{link_id}`
+
+Authenticated owner-only. Sets `revoked_at` (row kept for audit).
+
+Responses:
+
+- `204`
+- `404 file_not_found`
+
+### `GET /shared/links/{token}`
+
+Public, unauthenticated. Resolves a valid link. Any failure mode (bad token,
+revoked, expired, trashed file) returns a uniform `404 file_not_found`.
+
+Response `200`:
+
+```json
+{
+  "filename": "report.pdf",
+  "size_bytes": 12345,
+  "content_type": "application/pdf",
+  "download_url": "https://storage.example/objects/...presigned..."
+}
+```
+
 ## Future API Contracts
 
-- Share links: revocable tokenized links separate from registered-user email
-  grants.
+- Share links: password protection, folder links, and write-capable links are
+  out of scope for the current read-only single-file link.
 
 ## Validation Commands
 

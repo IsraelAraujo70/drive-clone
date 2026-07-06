@@ -176,6 +176,31 @@ export type DownloadResponse = {
   expires_at: string
 }
 
+export type CreatedShareLink = {
+  id: string
+  token: string
+  url: string
+  expires_at: string | null
+}
+
+export type ShareLinkRecord = {
+  id: string
+  created_at: string
+  expires_at: string | null
+  revoked_at: string | null
+}
+
+export type ListShareLinksResponse = {
+  links: ShareLinkRecord[]
+}
+
+export type PublicShareLink = {
+  filename: string
+  size_bytes: number
+  content_type: string
+  download_url: string
+}
+
 export type DirectUploadProgress = {
   loaded: number
   total: number
@@ -455,6 +480,27 @@ export const api = {
     }),
   listSharedWithMe: (token: string) =>
     request<ListSharedFilesResponse>("/files/shared-with-me", { token }),
+  createShareLink: (
+    token: string,
+    fileId: string,
+    input: { expires_in_seconds?: number | null } = {}
+  ) =>
+    request<CreatedShareLink>(`/files/${fileId}/share-links`, {
+      method: "POST",
+      token,
+      body: { expires_in_seconds: input.expires_in_seconds ?? null },
+    }),
+  listShareLinks: (token: string, fileId: string) =>
+    request<ListShareLinksResponse>(`/files/${fileId}/share-links`, { token }),
+  revokeShareLink: (token: string, fileId: string, linkId: string) =>
+    request<void>(`/files/${fileId}/share-links/${linkId}`, {
+      method: "DELETE",
+      token,
+    }),
+  resolveShareLink: (linkToken: string) =>
+    request<PublicShareLink>(
+      `/shared/links/${encodeURIComponent(linkToken)}`
+    ),
   searchFiles: (
     token: string,
     query: string,

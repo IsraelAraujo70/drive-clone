@@ -12,30 +12,32 @@ use crate::application::auth::logout::LogoutUseCase;
 use crate::application::auth::signup::{SignupInput, SignupUseCase};
 use crate::application::files::{
     BrowseFolderUseCase, CompleteUploadUseCase, CreateFolderInput, CreateFolderUseCase,
-    CreateResumableUploadUseCase, CreateUploadUseCase, DeleteFileUseCase, DeleteFolderUseCase,
-    DownloadFileUseCase, FinalizeResumableUploadUseCase, GetUploadStatusUseCase,
-    ListDriveTrashUseCase, ListFilesUseCase, ListFoldersUseCase, ListPendingUploadsUseCase,
+    CreateResumableUploadUseCase, CreateShareLinkInput, CreateShareLinkUseCase,
+    CreateUploadUseCase, DeleteFileUseCase, DeleteFolderUseCase, DownloadFileUseCase,
+    FinalizeResumableUploadUseCase, GetUploadStatusUseCase, ListDriveTrashUseCase,
+    ListFilesUseCase, ListFoldersUseCase, ListPendingUploadsUseCase, ListShareLinksUseCase,
     ListSharedWithMeUseCase, ListSharesUseCase, ListTrashUseCase, MIN_RESUMABLE_PART_SIZE_BYTES,
     PresignUploadPartInput, PresignUploadPartUseCase, RecordUploadPartInput,
-    RecordUploadPartUseCase, RestoreFileUseCase, RestoreFolderUseCase, RevokeShareUseCase,
-    SearchFilesInput, SearchFilesUseCase, ShareFileInput, ShareFileUseCase, UpdateFileInput,
-    UpdateFileUseCase, UpdateFolderInput, UpdateFolderUseCase,
+    RecordUploadPartUseCase, ResolveShareLinkUseCase, RestoreFileUseCase, RestoreFolderUseCase,
+    RevokeShareLinkUseCase, RevokeShareUseCase, SearchFilesInput, SearchFilesUseCase,
+    ShareFileInput, ShareFileUseCase, UpdateFileInput, UpdateFileUseCase, UpdateFolderInput,
+    UpdateFolderUseCase,
 };
 use crate::application::ports::RepositoryError;
 use crate::application::ports::auth::{AuthRepository, CreateUserRecord};
 use crate::application::ports::clock::{Clock, FixedClock};
 use crate::application::ports::files::{
-    CreateFolderRecord, CreatePendingFileRecord, CreateResumableUploadRecord, ExpiredUploadRecord,
-    FileRepository, RecordUploadPartRecord, SearchFilesRecord, UpdateFileRecord,
-    UpdateFolderRecord,
+    CreateFolderRecord, CreatePendingFileRecord, CreateResumableUploadRecord,
+    CreateShareLinkRecord, ExpiredUploadRecord, FileRepository, RecordUploadPartRecord,
+    SearchFilesRecord, UpdateFileRecord, UpdateFolderRecord,
 };
 use crate::application::ports::id_generator::SequenceIdGenerator;
 use crate::domain::auth::{User, UserWithPassword, hash_password, hash_token};
 use crate::domain::error::DomainError;
 use crate::domain::files::{
     ChangeLogEntry, DriveBrowse, DriveFile, FileShare, FileState, FileUser, Folder, PendingFile,
-    PendingUpload, ResumableUploadRequest, ResumableUploadSession, SearchAccess, SearchFileResult,
-    SharedFile, UploadPart, UploadRequest,
+    PendingUpload, PublicShareTarget, ResumableUploadRequest, ResumableUploadSession, SearchAccess,
+    SearchFileResult, ShareLink, SharedFile, UploadPart, UploadRequest,
 };
 
 fn fixed_now() -> DateTime<Utc> {
@@ -188,6 +190,7 @@ struct FakeFileRepository {
     folder_owners: Mutex<HashMap<Uuid, Uuid>>,
     users: Mutex<HashMap<Uuid, FileUser>>,
     shares: Mutex<HashMap<(Uuid, Uuid), DateTime<Utc>>>,
+    share_links: Mutex<HashMap<Uuid, (Uuid, Vec<u8>, ShareLink)>>,
     completed_count: Mutex<usize>,
     next_folder_id: Mutex<Option<Uuid>>,
 }
@@ -1079,6 +1082,111 @@ impl FileRepository for FakeFileRepository {
         _limit: i64,
     ) -> Result<Vec<ChangeLogEntry>, RepositoryError> {
         Ok(Vec::new())
+    }
+
+    async fn create_share_link(
+        &self,
+        input: CreateShareLinkRecord,
+    ) -> Result<ShareLink, RepositoryError> {
+        let completed = self.completed.lock().unwrap();
+        let owners = self.owners.lock().unwrap();
+        let owned = owners.get(&input.file_id).copied() == Some(input.owner_id)
+            && completed
+                .get(&input.file_id)
+                .is_some_and(|file| file.state == FileState::Complete && file.deleted_at.is_none());
+        if !owned {
+            return Err(RepositoryError::NotFound);
+        }
+        drop(completed);
+        drop(owners);
+
+        let link = ShareLink {
+            id: input.id,
+            file_id: input.file_id,
+            created_at: fixed_now(),
+            expires_at: input.expires_at,
+            revoked_at: None,
+        };
+        self.share_links
+            .lock()
+            .unwrap()
+            .insert(input.id, (input.file_id, input.token_hash, link.clone()));
+        Ok(link)
+    }
+
+    async fn list_share_links(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+    ) -> Result<Vec<ShareLink>, RepositoryError> {
+        if self.owners.lock().unwrap().get(&file_id).copied() != Some(owner_id) {
+            return Err(RepositoryError::NotFound);
+        }
+        let mut links: Vec<ShareLink> = self
+            .share_links
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|(link_file_id, _, _)| *link_file_id == file_id)
+            .map(|(_, _, link)| link.clone())
+            .collect();
+        links.sort_by(|a, b| b.id.cmp(&a.id));
+        Ok(links)
+    }
+
+    async fn revoke_share_link(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+        link_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<(), RepositoryError> {
+        if self.owners.lock().unwrap().get(&file_id).copied() != Some(owner_id) {
+            return Err(RepositoryError::NotFound);
+        }
+        let mut links = self.share_links.lock().unwrap();
+        match links.get_mut(&link_id) {
+            Some((link_file_id, _, link))
+                if *link_file_id == file_id && link.revoked_at.is_none() =>
+            {
+                link.revoked_at = Some(now);
+                Ok(())
+            }
+            _ => Err(RepositoryError::NotFound),
+        }
+    }
+
+    async fn resolve_share_link(
+        &self,
+        token_hash: &[u8],
+        now: DateTime<Utc>,
+    ) -> Result<Option<PublicShareTarget>, RepositoryError> {
+        let links = self.share_links.lock().unwrap();
+        let completed = self.completed.lock().unwrap();
+        for (file_id, hash, link) in links.values() {
+            if hash.as_slice() != token_hash {
+                continue;
+            }
+            if link.revoked_at.is_some() {
+                return Ok(None);
+            }
+            if link.expires_at.is_some_and(|expires| expires <= now) {
+                return Ok(None);
+            }
+            let Some(file) = completed.get(file_id) else {
+                return Ok(None);
+            };
+            if file.state != FileState::Complete || file.deleted_at.is_some() {
+                return Ok(None);
+            }
+            return Ok(Some(PublicShareTarget {
+                filename: file.filename.clone(),
+                size_bytes: file.size_bytes,
+                content_type: file.content_type.clone(),
+                object_key: file.object_key.clone(),
+            }));
+        }
+        Ok(None)
     }
 }
 
@@ -2221,4 +2329,211 @@ async fn folder_delete_and_restore_hide_and_restore_descendant_files() {
         .unwrap();
     assert_eq!(moved.filename, "renamed.txt");
     assert_eq!(moved.parent_folder_id, None);
+}
+
+#[tokio::test]
+async fn share_link_rejects_non_positive_expiry() {
+    let repo = Arc::new(FakeFileRepository::default());
+    let owner = user(
+        Uuid::parse_str("dddddddd-dddd-4ddd-8ddd-dddddddddddd").unwrap(),
+        "owner@example.com",
+        0,
+        100,
+    );
+    let file_id = Uuid::parse_str("12121212-1212-4212-8212-121212121212").unwrap();
+    repo.insert_completed(&owner, completed_file(file_id, "owner/link"));
+
+    let clock = Arc::new(FixedClock::new(fixed_now()));
+    let id_generator = Arc::new(SequenceIdGenerator::new([
+        Uuid::parse_str("aaaa1111-1111-4111-8111-111111111111").unwrap(),
+        Uuid::parse_str("aaaa2222-2222-4222-8222-222222222222").unwrap(),
+    ]));
+    let create = CreateShareLinkUseCase::new(
+        repo.clone(),
+        id_generator,
+        clock,
+        "https://web.test".to_string(),
+    );
+
+    for seconds in [0_i64, -1] {
+        assert_eq!(
+            create
+                .execute(
+                    &owner,
+                    CreateShareLinkInput {
+                        file_id,
+                        expires_in_seconds: Some(seconds),
+                    },
+                )
+                .await
+                .unwrap_err(),
+            AppError::Domain(DomainError::Validation(
+                "expires_in_seconds must be greater than zero"
+            ))
+        );
+    }
+}
+
+#[tokio::test]
+async fn share_link_create_resolve_revoke_and_expiry_are_scoped() {
+    let repo = Arc::new(FakeFileRepository::default());
+    let owner = user(
+        Uuid::parse_str("dddddddd-dddd-4ddd-8ddd-dddddddddddd").unwrap(),
+        "owner@example.com",
+        0,
+        100,
+    );
+    let other = user(
+        Uuid::parse_str("ffffffff-ffff-4fff-8fff-ffffffffffff").unwrap(),
+        "other@example.com",
+        0,
+        100,
+    );
+    let file_id = Uuid::parse_str("12121212-1212-4212-8212-121212121212").unwrap();
+    repo.insert_completed(&owner, completed_file(file_id, "owner/link"));
+
+    let clock = Arc::new(FixedClock::new(fixed_now()));
+    let storage = Arc::new(FakeObjectStorage::default());
+    storage.put_object("owner/link", 12);
+
+    let link_id = Uuid::parse_str("aaaa1111-1111-4111-8111-111111111111").unwrap();
+    let create = CreateShareLinkUseCase::new(
+        repo.clone(),
+        Arc::new(SequenceIdGenerator::new([link_id])),
+        clock.clone(),
+        "https://web.test/".to_string(),
+    );
+    let created = create
+        .execute(
+            &owner,
+            CreateShareLinkInput {
+                file_id,
+                expires_in_seconds: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.id, link_id);
+    assert_eq!(created.url, format!("https://web.test/s/{}", created.token));
+    assert!(created.expires_at.is_none());
+
+    // Non-owner cannot create, list, or revoke.
+    assert_eq!(
+        CreateShareLinkUseCase::new(
+            repo.clone(),
+            Arc::new(SequenceIdGenerator::new([Uuid::parse_str(
+                "aaaa2222-2222-4222-8222-222222222222"
+            )
+            .unwrap()])),
+            clock.clone(),
+            "https://web.test".to_string(),
+        )
+        .execute(
+            &other,
+            CreateShareLinkInput {
+                file_id,
+                expires_in_seconds: None,
+            },
+        )
+        .await
+        .unwrap_err(),
+        AppError::Domain(DomainError::FileNotFound)
+    );
+    assert_eq!(
+        ListShareLinksUseCase::new(repo.clone())
+            .execute(&other, file_id)
+            .await
+            .unwrap_err(),
+        AppError::Domain(DomainError::FileNotFound)
+    );
+    assert_eq!(
+        RevokeShareLinkUseCase::new(repo.clone(), clock.clone())
+            .execute(&other, file_id, link_id)
+            .await
+            .unwrap_err(),
+        AppError::Domain(DomainError::FileNotFound)
+    );
+
+    let resolve = ResolveShareLinkUseCase::new(repo.clone(), storage.clone(), clock.clone(), 900);
+
+    // Valid token resolves to metadata + a working download url.
+    let target = resolve.execute(&created.token).await.unwrap();
+    assert_eq!(target.filename, "report.txt");
+    assert_eq!(target.size_bytes, 12);
+    assert_eq!(target.content_type, "text/plain");
+    assert!(target.download_url.contains("owner/link"));
+
+    // Wrong token → uniform not found.
+    assert_eq!(
+        resolve.execute("not-a-real-token").await.unwrap_err(),
+        AppError::Domain(DomainError::FileNotFound)
+    );
+
+    // Owner lists the single link (no token exposed).
+    let links = ListShareLinksUseCase::new(repo.clone())
+        .execute(&owner, file_id)
+        .await
+        .unwrap();
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0].id, link_id);
+    assert!(links[0].revoked_at.is_none());
+
+    // Revoke → resolve becomes not found.
+    RevokeShareLinkUseCase::new(repo.clone(), clock.clone())
+        .execute(&owner, file_id, link_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        resolve.execute(&created.token).await.unwrap_err(),
+        AppError::Domain(DomainError::FileNotFound)
+    );
+}
+
+#[tokio::test]
+async fn share_link_expires_after_ttl() {
+    let repo = Arc::new(FakeFileRepository::default());
+    let owner = user(
+        Uuid::parse_str("dddddddd-dddd-4ddd-8ddd-dddddddddddd").unwrap(),
+        "owner@example.com",
+        0,
+        100,
+    );
+    let file_id = Uuid::parse_str("12121212-1212-4212-8212-121212121212").unwrap();
+    repo.insert_completed(&owner, completed_file(file_id, "owner/link"));
+
+    let create_clock = Arc::new(FixedClock::new(fixed_now()));
+    let storage = Arc::new(FakeObjectStorage::default());
+    storage.put_object("owner/link", 12);
+    let link_id = Uuid::parse_str("aaaa1111-1111-4111-8111-111111111111").unwrap();
+
+    let created = CreateShareLinkUseCase::new(
+        repo.clone(),
+        Arc::new(SequenceIdGenerator::new([link_id])),
+        create_clock.clone(),
+        "https://web.test".to_string(),
+    )
+    .execute(
+        &owner,
+        CreateShareLinkInput {
+            file_id,
+            expires_in_seconds: Some(60),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(created.expires_at.is_some());
+
+    // Still valid before expiry.
+    let before = ResolveShareLinkUseCase::new(repo.clone(), storage.clone(), create_clock, 900);
+    assert!(before.execute(&created.token).await.is_ok());
+
+    // After expiry → uniform not found.
+    let later = Arc::new(FixedClock::new(
+        fixed_now() + chrono::Duration::seconds(120),
+    ));
+    let after = ResolveShareLinkUseCase::new(repo.clone(), storage.clone(), later, 900);
+    assert_eq!(
+        after.execute(&created.token).await.unwrap_err(),
+        AppError::Domain(DomainError::FileNotFound)
+    );
 }

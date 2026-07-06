@@ -1,0 +1,27 @@
+meta {
+  name: Revoke Share Link
+  type: http
+  seq: 3
+}
+delete {
+  url: {{baseUrl}}/files/{{fileId}}/share-links/{{shareLinkId}}
+  body: none
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([204, 401, 404]).to.include(res.status);
+  });
+}
+
+docs {
+  Owner-only. Sets revoked_at (row kept for audit). Unknown, already-revoked, or cross-user link returns file_not_found.
+}

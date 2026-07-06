@@ -84,6 +84,18 @@ pub fn build_router(state: AppState, cors: CorsConfig) -> Router {
             "/files/{file_id}/shares/{grantee_id}",
             delete(file_routes::revoke_share),
         )
+        .route(
+            "/files/{file_id}/share-links",
+            post(file_routes::create_share_link).get(file_routes::list_share_links),
+        )
+        .route(
+            "/files/{file_id}/share-links/{link_id}",
+            delete(file_routes::revoke_share_link),
+        )
+        .route(
+            "/shared/links/{token}",
+            get(file_routes::resolve_share_link),
+        )
         .layer(TraceLayer::new_for_http())
         .layer(cors.layer())
         .with_state(state)

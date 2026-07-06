@@ -106,8 +106,8 @@ The product should define:
 Design the system with these long-term scale targets in mind:
 
 - 20 million registered users.
-- 15 GB of free storage per user.
-- Maximum file size of 15 GB per upload.
+- 50 MB of free storage per user.
+- Maximum file size of 50 MB per upload.
 - 3 million uploads per day.
 - Average upload size of 50 MB.
 

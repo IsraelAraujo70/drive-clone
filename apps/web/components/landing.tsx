@@ -137,7 +137,7 @@ export function Landing() {
           <div className="flex flex-col gap-6">
             <p className="text-muted-foreground flex items-center gap-2 font-mono text-xs tracking-[0.18em] uppercase">
               <span aria-hidden="true" className="bg-manila inline-block size-2" />
-              Personal cloud storage · 15 GB free
+              Personal cloud storage · 50 MB free
             </p>
             <h1 className="font-heading text-[clamp(2.75rem,6vw,4.5rem)] leading-[0.98] font-bold tracking-tight">
               Uploads that finish.
@@ -187,7 +187,7 @@ export function Landing() {
           <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 py-16 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex max-w-md flex-col gap-3">
               <h2 className="font-heading text-3xl font-bold tracking-tight">
-                15 GB free, counted in bytes.
+                50 MB free, counted in bytes.
               </h2>
               <p className="text-muted-foreground">
                 Every account starts with the full quota. No credit card, no
@@ -197,7 +197,7 @@ export function Landing() {
             <div className="flex w-full max-w-sm flex-col gap-2">
               <Progress value={100} aria-label="Free storage included" />
               <span className="text-muted-foreground font-mono text-xs">
-                storage_quota_bytes = 16,106,127,360
+                storage_quota_bytes = 52,428,800
               </span>
             </div>
             <Button size="lg" asChild>

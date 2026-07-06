@@ -77,7 +77,7 @@ node scripts/generate-bruno-collection.mjs
   "id": "uuid",
   "email": "user@example.com",
   "display_name": "User Name",
-  "storage_quota_bytes": 16106127360,
+  "storage_quota_bytes": 52428800,
   "storage_used_bytes": 0,
   "created_at": "2026-07-02T18:00:00Z"
 }

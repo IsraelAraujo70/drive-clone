@@ -59,7 +59,7 @@ export function SignupForm() {
             Create your account
           </CardTitle>
           <CardDescription>
-            15 GB of free storage, private by default.
+            50 MB of free storage, private by default.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-6">

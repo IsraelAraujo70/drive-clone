@@ -2,7 +2,7 @@ use std::env;
 
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
-pub const DEFAULT_MAX_FILE_SIZE_BYTES: i64 = 15 * 1024 * 1024 * 1024;
+pub const DEFAULT_MAX_FILE_SIZE_BYTES: i64 = 50 * 1024 * 1024;
 pub const DEFAULT_PRESIGNED_URL_TTL_SECONDS: i64 = 900;
 pub const DEFAULT_RESUMABLE_UPLOAD_TTL_SECONDS: i64 = 86_400;
 pub const DEFAULT_PUBLIC_WEB_URL: &str = "http://localhost:3000";

@@ -26,7 +26,7 @@ const fontMono = IBM_Plex_Mono({
 export const metadata: Metadata = {
   title: "Drive Clone · Personal cloud storage",
   description:
-    "Drive Clone is a personal cloud drive with signed direct uploads, folder organization, account-based sharing, scoped search, and 15 GB of free storage.",
+    "Drive Clone is a personal cloud drive with signed direct uploads, folder organization, account-based sharing, scoped search, and 50 MB of free storage.",
 }
 
 export default function RootLayout({

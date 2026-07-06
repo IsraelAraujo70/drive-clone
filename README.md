@@ -25,7 +25,7 @@ Future extensions:
 - Cursor-based sync API.
 - Local desktop or CLI sync client.
 
-The MVP should feel usable by one real person. The architecture should still be explicit about how it would scale toward 20 million registered users, 15 GB of free storage per user, 15 GB max files, and 3 million uploads per day.
+The MVP should feel usable by one real person. The architecture should still be explicit about how it would scale toward 20 million registered users, 50 MB of free storage per user, 50 MB max files, and 3 million uploads per day.
 
 ## Proposed Architecture
 
@@ -201,7 +201,7 @@ Measurable outcomes:
 - Failed uploads do not become visible files.
 - Completed uploads produce one metadata record and one stored object.
 - Resume state can be queried deterministically.
-- The backend never needs to load a 15 GB file into memory.
+- The backend never needs to load a 50 MB file into memory.
 
 ## Download Design
 
@@ -405,10 +405,10 @@ Integration tests should cover:
 
 Eval scenarios should cover:
 
-- 15 GB upload design review: the upload path sends file bytes directly to object storage and never requires the full file in API memory.
+- 50 MB upload design review: the upload path sends file bytes directly to object storage and never requires the full file in API memory.
 - Direct upload correctness: upload bytes through the signed URL, complete the file, request a download URL, and byte-compare the result.
 - Resume correctness: upload one part, query status, continue from recorded progress, finalize, and byte-compare the result.
-- Quota behavior: fill an account near 15 GB and reject the next upload with a clear error.
+- Quota behavior: fill an account near 50 MB and reject the next upload with a clear error.
 - Future sync convergence: apply remote changes, fetch from a cursor, and verify client state.
 - Access control: attempt cross-user reads, downloads, and searches.
 - Deploy health: verify Railway health and a small upload/download smoke test.

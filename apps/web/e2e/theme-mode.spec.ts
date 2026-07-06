@@ -17,7 +17,7 @@ async function mockDriveApi(page: import("@playwright/test").Page) {
           id: "user-1",
           email: "theme@example.com",
           display_name: "Theme User",
-          storage_quota_bytes: 16106127360,
+          storage_quota_bytes: 52428800,
           storage_used_bytes: 0,
           created_at: "2026-07-06T12:00:00Z",
         }),

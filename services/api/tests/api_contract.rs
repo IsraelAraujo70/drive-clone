@@ -158,6 +158,7 @@ async fn signup_creates_account_and_session(pool: PgPool) {
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(body["user"]["email"], "new.user@example.com");
     assert_eq!(body["user"]["display_name"], "Test User");
+    assert_eq!(body["user"]["storage_quota_bytes"], 52_428_800);
     assert_eq!(body["user"]["storage_used_bytes"], 0);
     assert!(body["user"].get("password_hash").is_none());
     assert!(body["token"].as_str().unwrap().len() > 40);

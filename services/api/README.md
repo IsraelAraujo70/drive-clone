@@ -59,7 +59,7 @@ The server reads:
 - `S3_ACCESS_KEY_ID`, required
 - `S3_SECRET_ACCESS_KEY`, required
 - `CORS_ALLOWED_ORIGINS`, comma-separated local web origins, for example `http://localhost:3000,http://127.0.0.1:3000`
-- `MAX_FILE_SIZE_BYTES`, default `16106127360`
+- `MAX_FILE_SIZE_BYTES`, default `52428800`
 - `PRESIGNED_URL_TTL_SECONDS`, default `900`
 
 Local MinIO example:

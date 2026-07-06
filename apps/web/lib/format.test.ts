@@ -13,8 +13,8 @@ describe("formatBytes", () => {
     expect(formatBytes(5 * 1024 * 1024)).toBe("5 MB")
   })
 
-  it("formats the 15 GB default quota cleanly", () => {
-    expect(formatBytes(16106127360)).toBe("15 GB")
+  it("formats the 50 MB proof-of-concept quota cleanly", () => {
+    expect(formatBytes(52428800)).toBe("50 MB")
   })
 
   it("never returns negative values", () => {

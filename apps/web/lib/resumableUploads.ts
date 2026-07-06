@@ -108,6 +108,7 @@ export function fileMatchesStoredUpload(
   pending: PendingResumableUpload
 ) {
   return (
-    resumableUploadKey(file, pending.upload.parent_folder_id) === pending.key
+    file.name === pending.upload.filename &&
+    file.size === pending.upload.size_bytes
   )
 }

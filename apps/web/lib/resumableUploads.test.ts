@@ -90,6 +90,15 @@ describe("resumable upload storage", () => {
     }
 
     expect(fileMatchesStoredUpload(file(), pending)).toBe(true)
+    expect(
+      fileMatchesStoredUpload(
+        new File(["bytes"], "BKEEPER.dmg", {
+          type: "",
+          lastModified: 1_730_000_000_000,
+        }),
+        pending
+      )
+    ).toBe(true)
     expect(fileMatchesStoredUpload(file("other.dmg"), pending)).toBe(false)
   })
 })

@@ -65,8 +65,8 @@ bash docs/evals/resumable-resume-ui-smoke.sh
 
 The script creates a real resumable upload session through the API, seeds the
 browser auth token plus pending upload record in `localStorage`, opens `/drive`,
-and verifies the UI tells the user that one upload can resume by selecting the
-same local file again.
+clicks `Resume`, attaches the matching local file with a different modified
+timestamp, and verifies the original upload session becomes `complete`.
 
 ## Share + Soft Delete Smoke
 

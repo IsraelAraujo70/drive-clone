@@ -754,7 +754,10 @@ export function DriveShell() {
 
   async function handleUpload(
     file: File,
-    options: { parentFolderId?: string | null } = {}
+    options: {
+      parentFolderId?: string | null
+      pendingUpload?: PendingResumableUpload
+    } = {}
   ) {
     if (!token) {
       setError("Your session expired. Log in again to upload files.")
@@ -767,10 +770,15 @@ export function DriveShell() {
     setUploadProgress(0)
 
     try {
-      const parentFolderId = options.parentFolderId ?? currentFolderId
+      const parentFolderId =
+        options.pendingUpload?.upload.parent_folder_id ??
+        options.parentFolderId ??
+        currentFolderId
       const contentType = file.type || "application/octet-stream"
-      const storageKey = resumableUploadKey(file, parentFolderId)
-      const stored = readStoredUploads()[storageKey]
+      const storageKey =
+        options.pendingUpload?.key ?? resumableUploadKey(file, parentFolderId)
+      const stored =
+        options.pendingUpload?.upload ?? readStoredUploads()[storageKey]
       let fileId: string | undefined = stored?.file_id
       let partSizeBytes = 0
       let confirmedParts = new Map<number, number>()
@@ -893,9 +901,7 @@ export function DriveShell() {
       }
       return
     }
-    void handleUpload(file, {
-      parentFolderId: resumeTarget.upload.parent_folder_id,
-    })
+    void handleUpload(file, { pendingUpload: resumeTarget })
   }
 
   function handleDismissPendingUpload(pending: PendingResumableUpload) {

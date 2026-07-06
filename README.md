@@ -6,17 +6,28 @@ The goal is to build a real product experience first, then document how the syst
 
 ## Product Direction
 
-The first version should be a working personal cloud drive:
+The first version should be a working personal cloud drive. Current implemented
+scope:
 
 - Sign up and log in.
-- Upload files.
+- Upload files through a signed direct single-object upload flow.
 - Browse files and folders.
 - Download files.
 - Rename, move, delete, and restore items.
 - See storage usage.
 - Share files with another registered user by email.
 - Search files by name.
-- Resume interrupted uploads.
+
+Next milestone:
+
+- Resumable uploads with upload sessions, part tracking, status lookup,
+  finalization, expiration, and cleanup.
+
+Future extensions:
+
+- Revocable share links.
+- Cursor-based sync API.
+- Local desktop or CLI sync client.
 
 The MVP should feel usable by one real person. The architecture should still be explicit about how it would scale toward 20 million registered users, 15 GB of free storage per user, 15 GB max files, and 3 million uploads per day.
 
@@ -30,7 +41,7 @@ Use a services-first architecture:
 - `contracts`: shared API and schema documentation.
 - `docs`: architecture diagrams, deployment notes, and eval reports.
 
-The backend owns metadata, authorization, upload state, quota enforcement, and sync semantics. File bytes live in S3-compatible object storage. PostgreSQL stores durable metadata.
+The backend owns metadata, authorization, direct upload completion, quota enforcement, and future sync semantics. File bytes live in S3-compatible object storage. PostgreSQL stores durable metadata.
 
 ## Repository Structure
 
@@ -72,11 +83,10 @@ Backend API:
 
 - Authentication and sessions.
 - File and folder metadata.
-- Upload sessions.
+- Direct upload creation and completion.
 - Download authorization.
-- Sharing.
+- User-to-user sharing by email.
 - Search.
-- Sync cursor API.
 - Quota enforcement.
 - Health checks and metrics.
 
@@ -85,10 +95,10 @@ Frontend:
 - Login and signup screens.
 - Drive browser.
 - Folder navigation.
-- Upload progress and resume UI.
+- Upload progress for the current direct upload flow.
 - File actions.
 - Trash and restore flows.
-- Share-link management.
+- User-to-user sharing controls.
 - Search.
 - Storage usage display.
 
@@ -130,21 +140,39 @@ The storage interface must stay S3-compatible so the project can move from Railw
 
 ## Data Model
 
-Minimum metadata concepts:
+Current metadata concepts:
 
 - `users`: account identity and storage quota.
-- `drive_items`: files and folders in a user-owned tree.
-- `files`: file-specific metadata, object key, checksum, size, and upload state.
+- `folders`: user-owned folder tree.
+- `files`: file-specific metadata, parent folder, object key, checksum, size,
+  upload state, and trash state.
+- `file_shares`: user-to-user file grants by registered account.
+
+Future metadata concepts:
+
 - `upload_sessions`: resumable upload lifecycle.
-- `upload_parts`: confirmed chunks or parts for resumable uploads.
+- `upload_parts`: confirmed object-storage parts for resumable uploads.
 - `share_links`: revocable private sharing tokens.
 - `change_log`: ordered events for sync clients.
 
-Only completed files should appear in the normal drive view. Incomplete uploads should remain visible only through upload-session APIs.
+Only completed files appear in the normal drive view. The current direct upload
+flow creates a pending file row, uploads one object through a presigned PUT URL,
+then verifies object length before marking the file `complete`.
 
 ## Upload Design
 
-Uploads should use an explicit state machine:
+Current implementation:
+
+1. Client calls `POST /files/uploads` with filename, size, parent folder,
+   content type, and optional checksum metadata.
+2. API checks parent-folder ownership, quota, and file-size limits.
+3. API stores pending file metadata and returns a short-lived presigned PUT URL.
+4. Client uploads the full object directly to S3-compatible object storage.
+5. Client calls `POST /files/{file_id}/complete`.
+6. API verifies the stored object length, marks the file `complete`, and
+   increments storage usage exactly once.
+
+Future resumable uploads should use an explicit state machine:
 
 - `created`
 - `receiving`
@@ -153,20 +181,11 @@ Uploads should use an explicit state machine:
 - `failed`
 - `expired`
 
-Recommended flow:
-
-1. Client creates an upload session with filename, size, parent folder, and checksum metadata.
-2. API checks quota and file-size limits.
-3. Client uploads chunks or object-storage parts.
-4. API records confirmed parts.
-5. Client asks the API to finalize.
-6. API validates all expected parts, writes final metadata, and marks the file `complete`.
-
 Measurable outcomes:
 
 - Failed uploads do not become visible files.
 - Completed uploads produce one metadata record and one stored object.
-- Resume state can be queried deterministically.
+- Future resume state can be queried deterministically.
 - The backend never needs to load a 15 GB file into memory.
 
 ## Download Design
@@ -204,7 +223,9 @@ Measurable outcomes:
 
 ## Sync Design
 
-Expose a cursor-based sync API early, even before a full desktop client exists.
+Sync is a future contract milestone, not part of the current HTTP API. The
+intended first sync deliverable is a cursor-based API that can be tested before a
+full desktop client exists.
 
 Minimum endpoint:
 
@@ -264,16 +285,16 @@ Initial deployment status:
 - Latest verified web deployment: `ef2f4843-f122-400b-92ff-ec0157329d67`.
 - Product resources for Postgres, buckets, and workers will be added as their implementation lands.
 
-## Milestones
+## Roadmap By Status
 
-### Milestone 1: MVP Web Drive
+### Implemented: MVP Web Drive
 
-Deliver:
+Delivered:
 
 - Rust API.
 - TypeScript web app.
 - User auth.
-- File upload.
+- Direct file upload.
 - File download.
 - Folder browsing.
 - Rename, move, delete, and restore.
@@ -282,9 +303,23 @@ Deliver:
 - S3-compatible object storage.
 - Railway deployment.
 
-Done when a user can sign up, upload a file, see it in the drive, download it, delete it, restore it, and see accurate storage usage.
+Done: a user can sign up, upload a file, see it in the drive, download it,
+delete it, restore it, and see accurate storage usage.
 
-### Milestone 2: Resumable Uploads
+### Implemented: Sharing and Search
+
+Delivered:
+
+- User-to-user sharing by email.
+- Shared download authorization.
+- Filename search.
+- Search indexes.
+- Access-control tests and smoke evals.
+
+Done: users can share a file with another registered user, revoke that access,
+and search accessible files without leaking private files.
+
+### Next: Resumable Uploads
 
 Deliver:
 
@@ -297,19 +332,7 @@ Deliver:
 
 Done when a browser refresh or network interruption can resume a partially uploaded file without restarting completed chunks.
 
-### Milestone 3: Sharing and Search
-
-Deliver:
-
-- User-to-user sharing by email.
-- Shared download authorization.
-- Filename search.
-- Search indexes.
-- Access-control tests.
-
-Done when users can share a file with another registered user, revoke that access, and search accessible files without leaking private files.
-
-### Milestone 4: Sync API and Rust Client
+### Future: Sync API and Rust Client
 
 Deliver:
 
@@ -321,7 +344,7 @@ Deliver:
 
 Done when the CLI can sync a local folder from remote changes and handle conflicts deterministically.
 
-### Milestone 5: Scale and Reliability Hardening
+### Future: Scale and Reliability Hardening
 
 Deliver:
 
@@ -344,13 +367,14 @@ Required gate test coverage:
 
 - Quota enforcement.
 - File ownership authorization.
-- Share-link authorization and revocation.
+- User-to-user share authorization and revocation.
 - Folder tree integrity.
-- Upload session state transitions.
-- Chunk resume logic.
-- Sync cursor ordering.
-- Conflict behavior.
 - Search scoping.
+- Direct upload completion idempotency and object length validation.
+- Future upload session state transitions.
+- Future part resume logic.
+- Future sync cursor ordering.
+- Future conflict behavior.
 
 Integration tests should cover:
 
@@ -363,10 +387,11 @@ Integration tests should cover:
 
 Eval scenarios should cover:
 
-- 15 GB upload design review: the upload path streams chunks and never requires the full file in memory.
-- Resume correctness: interrupt after several chunks, resume, and verify final checksum.
+- 15 GB upload design review: the upload path sends file bytes directly to object storage and never requires the full file in API memory.
+- Direct upload correctness: upload bytes through the signed URL, complete the file, request a download URL, and byte-compare the result.
+- Future resume correctness: interrupt after several parts, continue from recorded progress, and verify final checksum.
 - Quota behavior: fill an account near 15 GB and reject the next upload with a clear error.
-- Sync convergence: apply remote changes, fetch from a cursor, and verify client state.
+- Future sync convergence: apply remote changes, fetch from a cursor, and verify client state.
 - Access control: attempt cross-user reads, downloads, and searches.
 - Deploy health: verify Railway health and a small upload/download smoke test.
 
@@ -376,11 +401,12 @@ Track:
 
 - Upload success rate.
 - Upload failure rate by reason.
-- Resume success rate.
+- Future resume success rate.
 - Download success and error rates.
 - Storage used per user.
 - Quota rejection count.
-- Share-link access count.
+- User-to-user share grant and revoke counts.
+- Future share-link access count.
 - Background job retry count.
 - Deployment health checks.
 
@@ -392,10 +418,9 @@ Track:
 4. Move the file into the folder.
 5. Download the file.
 6. Delete and restore the file.
-7. Start a large upload, interrupt it, and resume it.
-8. Create and revoke a user share.
-9. Search for the file.
-10. Show deployment health and test results.
+7. Create and revoke a user share.
+8. Search for the file.
+9. Show deployment health and test results.
 
 ## Local Development
 

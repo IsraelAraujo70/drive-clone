@@ -27,6 +27,10 @@ Folder organization uses the same `file_not_found` code for private or missing
 folders so callers cannot distinguish cross-user resources from absent ones.
 Invalid folder moves, including cycles, return `invalid_file_state`.
 
+Current upload scope: this contract supports direct single-object uploads through
+a presigned PUT URL. Multipart or resumable upload sessions are not part of the
+current API contract.
+
 ## POST /files/uploads
 
 Request:
@@ -61,7 +65,9 @@ Response `201`:
 }
 ```
 
-The client uploads bytes directly to `upload_url` with HTTP `PUT`.
+The client uploads the full object directly to `upload_url` with HTTP `PUT`.
+After that, the client must complete the file through the API before it appears
+in drive listings.
 
 ## POST /files/{file_id}/complete
 
@@ -326,7 +332,10 @@ Returns top-level trash entries for the authenticated user's drive:
 
 ## Sharing
 
-File-level, view/download permission only. Private by default: a file is accessible only to its owner until shared.
+File-level, view/download permission only. Private by default: a file is
+accessible only to its owner until the owner grants access to another registered
+user by email. Revocable public or tokenized share links are a future extension,
+not part of this contract.
 
 ### POST /files/{file_id}/shares
 
@@ -393,3 +402,12 @@ Files shared with the authenticated user that are `complete` and not deleted, ne
   ]
 }
 ```
+
+## Future Contracts
+
+- Resumable uploads: upload sessions, object-storage parts, progress/status
+  lookup, finalization, expiration, and cleanup.
+- Share links: revocable tokenized links separate from the current registered
+  user email grants.
+- Sync: cursor-based change feed with tombstones and deterministic conflict
+  behavior.

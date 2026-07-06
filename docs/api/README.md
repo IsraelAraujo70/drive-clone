@@ -383,6 +383,10 @@ Responses:
 
 ## Files
 
+Current upload scope: the API supports direct single-object uploads through a
+short-lived presigned PUT URL. Multipart/resumable upload sessions, progress
+status, and upload cleanup are future API work.
+
 ### `POST /files/uploads`
 
 Authenticated. Creates pending file metadata and returns a presigned PUT URL.
@@ -421,7 +425,8 @@ Response `201`:
 ### Direct `PUT upload_url`
 
 Not an API route. The client uploads raw bytes directly to object storage using
-the `upload_url` from `POST /files/uploads`.
+the `upload_url` from `POST /files/uploads`. This is one full-object PUT for the
+current contract.
 
 Required header:
 
@@ -532,7 +537,8 @@ Response `200`:
 ## Shares
 
 Sharing is file-level view/download permission by registered user email. Files
-are private by default.
+are private by default. Public or tokenized share links are not part of the
+current API contract.
 
 ### `POST /files/{file_id}/shares`
 
@@ -579,6 +585,15 @@ Responses:
 
 - `204`
 - `404 file_not_found`
+
+## Future API Contracts
+
+- Resumable uploads: create an upload session, upload parts, query progress,
+  finalize the object, expire abandoned sessions, and clean up orphaned parts.
+- Share links: revocable tokenized links separate from registered-user email
+  grants.
+- Sync: cursor-based `/sync/changes` contract with tombstones and deterministic
+  conflict behavior.
 
 ## Validation Commands
 

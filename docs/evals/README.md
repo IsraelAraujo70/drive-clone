@@ -1,5 +1,18 @@
 # Evals
 
+## Product Copy Smoke
+
+Runs locally without services:
+
+```bash
+bash docs/evals/product-copy-smoke.sh
+```
+
+The script checks only the public landing page and metadata. It fails if those
+surfaces advertise upload recovery, object parts, or share links before those
+features exist, and confirms the landing mentions the implemented direct upload,
+account sharing, search, and folder/trash/restore capabilities.
+
 ## MinIO Upload Smoke
 
 Run after the API is serving against docker-compose Postgres and MinIO:

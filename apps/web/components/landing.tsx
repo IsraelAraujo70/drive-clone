@@ -1,28 +1,17 @@
 "use client"
 
-import { useEffect, useState } from "react"
 import Link from "next/link"
 
 import { Brand } from "@/components/brand"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { useAuth } from "@/lib/auth"
-import {
-  INTERRUPT_AT,
-  TOTAL_CHUNKS,
-  statusFor,
-  uploadFrames,
-  type UploadPhase,
-} from "@/lib/uploadDemo"
-import { cn } from "@/lib/utils"
-
-const FRAME_MS = 130
 
 const listing = [
   {
     path: "/uploads",
-    title: "Resumable by design",
-    copy: "Interrupted transfers pick up at the last confirmed chunk, never from zero.",
+    title: "Signed direct uploads",
+    copy: "The API checks quota, signs a short-lived upload URL, then verifies the stored object before it appears.",
   },
   {
     path: "/folders",
@@ -32,7 +21,7 @@ const listing = [
   {
     path: "/shared",
     title: "Private by default",
-    copy: "Nothing is visible to anyone until you create a share link. Revoke it any time.",
+    copy: "Grant access to a registered user's email, revoke that access, and keep every other file private.",
   },
   {
     path: "/search",
@@ -41,47 +30,34 @@ const listing = [
   },
 ]
 
-function useUploadDemo() {
-  // Static "complete" frame until the effect runs, and forever under reduced motion.
-  const [index, setIndex] = useState(uploadFrames.length - 1)
-
-  useEffect(() => {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      return
-    }
-    // Starts at the last frame, so the first tick wraps to frame 0.
-    const timer = setInterval(
-      () => setIndex((current) => (current + 1) % uploadFrames.length),
-      FRAME_MS,
-    )
-    return () => clearInterval(timer)
-  }, [])
-
-  return uploadFrames[index]
-}
-
-const phaseLabel: Record<UploadPhase, string> = {
-  uploading: "receiving",
-  interrupted: "interrupted",
-  resumed: "receiving",
-  complete: "complete",
-}
-
-const phasePill: Record<UploadPhase, string> = {
-  uploading: "bg-secondary text-primary",
-  resumed: "bg-secondary text-primary",
-  interrupted: "bg-accent text-accent-foreground",
-  complete: "bg-success/10 text-success",
-}
+const uploadFlow = [
+  {
+    method: "POST",
+    path: "/files/uploads",
+    detail: "Validate metadata, parent folder, size, and quota.",
+  },
+  {
+    method: "PUT",
+    path: "upload_url",
+    detail: "Send bytes directly to S3-compatible object storage.",
+  },
+  {
+    method: "POST",
+    path: "/files/{file_id}/complete",
+    detail: "Verify object length and mark the file complete.",
+  },
+  {
+    method: "GET",
+    path: "/drive",
+    detail: "Show only completed files the user can access.",
+  },
+]
 
 function UploadCard() {
-  const frame = useUploadDemo()
-  const done = frame.phase === "complete"
-
   return (
     <figure
       role="img"
-      aria-label="Demo of a resumable upload: the transfer loses its connection at chunk 12, resumes from the saved progress, and completes."
+      aria-label="Current Drive Clone upload flow: create upload metadata, upload directly to object storage, complete the file, then show it in the drive."
       className="border-border bg-card relative mt-6 rounded-xl border p-6 shadow-sm"
     >
       <span className="bg-manila text-manila-foreground absolute -top-6 left-6 rounded-t-md px-3 py-1 font-mono text-[11px] font-medium tracking-[0.14em] uppercase">
@@ -89,43 +65,39 @@ function UploadCard() {
       </span>
 
       <div className="flex items-baseline justify-between gap-4 font-mono">
-        <span className="text-sm font-medium">site-photos-2026.zip</span>
-        <span className="text-muted-foreground text-xs">48.2 MB · 30 chunks</span>
+        <span className="text-sm font-medium">contract.pdf</span>
+        <span className="text-muted-foreground text-xs">single object</span>
       </div>
 
-      <div
-        aria-hidden="true"
-        className="mt-5 grid grid-cols-[repeat(15,minmax(0,1fr))] gap-1"
-      >
-        {Array.from({ length: TOTAL_CHUNKS }, (_, i) => {
-          const lost = frame.phase === "interrupted" && i === INTERRUPT_AT
-          return (
-            <span
-              key={i}
-              className={cn(
-                "aspect-square rounded-[3px] transition-colors duration-100",
-                i < frame.progress
-                  ? done
-                    ? "bg-success"
-                    : "bg-primary"
-                  : "bg-border",
-                lost && "bg-manila animate-pulse",
-              )}
-            />
-          )
-        })}
+      <div className="mt-5 grid gap-3">
+        {uploadFlow.map((step, index) => (
+          <div
+            key={step.path}
+            className="border-border/80 grid min-h-16 grid-cols-[44px_1fr] items-start gap-3 border-b pb-3 last:border-b-0 last:pb-0"
+          >
+            <span className="bg-secondary text-primary flex size-8 items-center justify-center rounded-full font-mono text-xs font-semibold">
+              {index + 1}
+            </span>
+            <div className="min-w-0">
+              <p className="font-mono text-xs font-medium">
+                <span className="text-success">{step.method}</span>{" "}
+                <span className="break-all">{step.path}</span>
+              </p>
+              <p className="text-muted-foreground mt-1 text-sm leading-snug">
+                {step.detail}
+              </p>
+            </div>
+          </div>
+        ))}
       </div>
 
       <figcaption className="mt-5 flex items-center gap-3 font-mono text-xs">
-        <span
-          className={cn(
-            "rounded-full px-2.5 py-0.5 font-medium tracking-wider uppercase",
-            phasePill[frame.phase],
-          )}
-        >
-          {phaseLabel[frame.phase]}
+        <span className="bg-success/10 text-success rounded-full px-2.5 py-0.5 font-medium tracking-wider uppercase">
+          complete only
         </span>
-        <span className="text-muted-foreground">{statusFor(frame)}</span>
+        <span className="text-muted-foreground">
+          Pending objects stay hidden until verified.
+        </span>
       </figcaption>
     </figure>
   )
@@ -173,10 +145,9 @@ export function Landing() {
               Files that stay yours.
             </h1>
             <p className="text-muted-foreground max-w-[34rem] text-lg leading-relaxed">
-              Drive Clone keeps every confirmed byte. Lose your connection, close
-              the tab, come back tomorrow: your upload resumes exactly where it
-              stopped, and nothing you store is visible to anyone else until you
-              share it.
+              Drive Clone signs direct uploads, verifies stored objects before
+              listing them, and keeps files private unless you grant access to a
+              registered account.
             </p>
             <div className="flex flex-wrap items-center gap-3">
               <Button size="lg" asChild>

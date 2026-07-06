@@ -376,6 +376,14 @@ const folders = [
         tests: ["expect([200, 401, 404]).to.include(res.status);"],
       },
       {
+        name: "List Pending Uploads",
+        method: "get",
+        url: "{{baseUrl}}/files/uploads/pending",
+        auth: "bearer",
+        docs: "Lists the caller's own pending, non-expired resumable sessions so the client can recover interrupted uploads. The server is authoritative for existence and expiration.",
+        tests: ["expect([200, 401]).to.include(res.status);"],
+      },
+      {
         name: "Sign Upload Part",
         method: "post",
         url: "{{baseUrl}}/files/uploads/{{fileId}}/parts",

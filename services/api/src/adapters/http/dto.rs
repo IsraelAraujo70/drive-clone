@@ -13,8 +13,8 @@ use crate::application::files::{
 use crate::domain::auth::User;
 use crate::domain::files::{
     ChangeLogEntry, DriveBrowse, DriveFile, FileShare, FileUser, Folder, FolderPathEntry,
-    ResumableUploadRequest, ResumableUploadSession, SearchFileResult, SharedFile, UploadPart,
-    UploadRequest,
+    PendingUpload, ResumableUploadRequest, ResumableUploadSession, SearchFileResult, SharedFile,
+    UploadPart, UploadRequest,
 };
 
 #[derive(Deserialize)]
@@ -179,6 +179,46 @@ impl From<ResumableUploadSession> for UploadStatusResponse {
             updated_at: session.updated_at,
             completed_at: session.completed_at,
             parts: session.parts.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct PendingUploadResponse {
+    file_id: Uuid,
+    filename: String,
+    parent_folder_id: Option<Uuid>,
+    size_bytes: i64,
+    part_size_bytes: i64,
+    checksum_sha256: Option<String>,
+    parts_received: i64,
+    expires_at: DateTime<Utc>,
+}
+
+impl From<PendingUpload> for PendingUploadResponse {
+    fn from(upload: PendingUpload) -> Self {
+        Self {
+            file_id: upload.file_id,
+            filename: upload.filename,
+            parent_folder_id: upload.parent_folder_id,
+            size_bytes: upload.size_bytes,
+            part_size_bytes: upload.part_size_bytes,
+            checksum_sha256: upload.checksum_sha256,
+            parts_received: upload.parts_received,
+            expires_at: upload.expires_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ListPendingUploadsResponse {
+    uploads: Vec<PendingUploadResponse>,
+}
+
+impl From<Vec<PendingUpload>> for ListPendingUploadsResponse {
+    fn from(uploads: Vec<PendingUpload>) -> Self {
+        Self {
+            uploads: uploads.into_iter().map(Into::into).collect(),
         }
     }
 }

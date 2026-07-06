@@ -9,10 +9,11 @@ use crate::adapters::http::dto::{
     BrowseDriveQuery, CreateFolderRequest, CreateResumableUploadRequest,
     CreateResumableUploadResponse, CreateUploadRequest, CreateUploadResponse, DownloadResponse,
     DriveBrowseResponse, ExpireUploadsResponse, FileResponse, FileShareResponse, FolderResponse,
-    ListFilesResponse, ListFoldersResponse, ListSharedWithMeResponse, ListSharesResponse,
-    PresignUploadPartRequest, PresignUploadPartResponse, RecordUploadPartRequest, SearchFilesQuery,
-    SearchFilesResponse, ShareFileRequest, SyncChangesQuery, SyncChangesResponse,
-    UpdateFileRequest, UpdateFolderRequest, UploadPartResponse, UploadStatusResponse,
+    ListFilesResponse, ListFoldersResponse, ListPendingUploadsResponse, ListSharedWithMeResponse,
+    ListSharesResponse, PresignUploadPartRequest, PresignUploadPartResponse,
+    RecordUploadPartRequest, SearchFilesQuery, SearchFilesResponse, ShareFileRequest,
+    SyncChangesQuery, SyncChangesResponse, UpdateFileRequest, UpdateFolderRequest,
+    UploadPartResponse, UploadStatusResponse,
 };
 use crate::adapters::http::error::HttpError;
 use crate::bootstrap::state::AppState;
@@ -54,6 +55,14 @@ pub async fn get_upload_status(
 ) -> Result<Json<UploadStatusResponse>, HttpError> {
     let session = state.get_upload_status.execute(&auth.user, file_id).await?;
     Ok(Json(UploadStatusResponse::from(session)))
+}
+
+pub async fn list_pending_uploads(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+) -> Result<Json<ListPendingUploadsResponse>, HttpError> {
+    let uploads = state.list_pending_uploads.execute(&auth.user).await?;
+    Ok(Json(ListPendingUploadsResponse::from(uploads)))
 }
 
 pub async fn presign_upload_part(

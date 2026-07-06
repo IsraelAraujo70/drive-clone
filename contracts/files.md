@@ -98,7 +98,9 @@ Rules:
   small values when needed to satisfy the S3 multipart minimum part size and
   stay within the S3 multipart limit of 10,000 parts.
 - The upload expires at `expires_at`; expired pending sessions cannot sign parts
-  or finalize.
+  or finalize. The session lifetime is `RESUMABLE_UPLOAD_TTL_SECONDS` (default
+  86400, i.e. 24h) and is independent of `PRESIGNED_URL_TTL_SECONDS`, which only
+  governs how long each individual part upload URL is valid.
 
 Response `201`:
 
@@ -135,6 +137,36 @@ Owner-only. Returns the resumable session and confirmed parts:
   ]
 }
 ```
+
+### GET /files/uploads/pending
+
+Authenticated. Lists the caller's own resumable sessions that are still
+`pending` and not yet expired (`upload_expires_at > now`). Used by the web client
+to recover interrupted uploads across reloads and devices. The server is the
+source of truth for which sessions still exist and when they expire.
+
+Response `200`:
+
+```json
+{
+  "uploads": [
+    {
+      "file_id": "uuid",
+      "filename": "video.mov",
+      "parent_folder_id": null,
+      "size_bytes": 6291493,
+      "part_size_bytes": 6291456,
+      "checksum_sha256": null,
+      "parts_received": 1,
+      "expires_at": "2026-07-06T19:30:00Z"
+    }
+  ]
+}
+```
+
+- `parts_received` is the count of recorded `upload_parts` for the session.
+- Sessions are ordered by creation time, newest first.
+- Finalized, expired, or non-resumable uploads never appear.
 
 ### POST /files/uploads/{file_id}/parts
 

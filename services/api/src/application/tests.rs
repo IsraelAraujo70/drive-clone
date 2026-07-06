@@ -14,11 +14,12 @@ use crate::application::files::{
     BrowseFolderUseCase, CompleteUploadUseCase, CreateFolderInput, CreateFolderUseCase,
     CreateResumableUploadUseCase, CreateUploadUseCase, DeleteFileUseCase, DeleteFolderUseCase,
     DownloadFileUseCase, FinalizeResumableUploadUseCase, GetUploadStatusUseCase,
-    ListDriveTrashUseCase, ListFilesUseCase, ListFoldersUseCase, ListSharedWithMeUseCase,
-    ListSharesUseCase, ListTrashUseCase, MIN_RESUMABLE_PART_SIZE_BYTES, PresignUploadPartInput,
-    PresignUploadPartUseCase, RecordUploadPartInput, RecordUploadPartUseCase, RestoreFileUseCase,
-    RestoreFolderUseCase, RevokeShareUseCase, SearchFilesInput, SearchFilesUseCase, ShareFileInput,
-    ShareFileUseCase, UpdateFileInput, UpdateFileUseCase, UpdateFolderInput, UpdateFolderUseCase,
+    ListDriveTrashUseCase, ListFilesUseCase, ListFoldersUseCase, ListPendingUploadsUseCase,
+    ListSharedWithMeUseCase, ListSharesUseCase, ListTrashUseCase, MIN_RESUMABLE_PART_SIZE_BYTES,
+    PresignUploadPartInput, PresignUploadPartUseCase, RecordUploadPartInput,
+    RecordUploadPartUseCase, RestoreFileUseCase, RestoreFolderUseCase, RevokeShareUseCase,
+    SearchFilesInput, SearchFilesUseCase, ShareFileInput, ShareFileUseCase, UpdateFileInput,
+    UpdateFileUseCase, UpdateFolderInput, UpdateFolderUseCase,
 };
 use crate::application::ports::RepositoryError;
 use crate::application::ports::auth::{AuthRepository, CreateUserRecord};
@@ -33,8 +34,8 @@ use crate::domain::auth::{User, UserWithPassword, hash_password, hash_token};
 use crate::domain::error::DomainError;
 use crate::domain::files::{
     ChangeLogEntry, DriveBrowse, DriveFile, FileShare, FileState, FileUser, Folder, PendingFile,
-    ResumableUploadRequest, ResumableUploadSession, SearchAccess, SearchFileResult, SharedFile,
-    UploadPart, UploadRequest,
+    PendingUpload, ResumableUploadRequest, ResumableUploadSession, SearchAccess, SearchFileResult,
+    SharedFile, UploadPart, UploadRequest,
 };
 
 fn fixed_now() -> DateTime<Utc> {
@@ -338,6 +339,43 @@ impl FileRepository for FakeFileRepository {
         parts.sort_by_key(|part| part.part_number);
         session.parts = parts;
         Ok(Some(session))
+    }
+
+    async fn list_pending_resumable_uploads(
+        &self,
+        owner_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<PendingUpload>, RepositoryError> {
+        let upload_parts = self.upload_parts.lock().unwrap();
+        let mut uploads = self
+            .resumable
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|session| {
+                session.owner_id == owner_id
+                    && session.state == FileState::Pending
+                    && session.upload_expires_at > now
+            })
+            .map(|session| {
+                let parts_received = upload_parts
+                    .keys()
+                    .filter(|(file_id, _)| *file_id == session.file_id)
+                    .count() as i64;
+                PendingUpload {
+                    file_id: session.file_id,
+                    filename: session.filename.clone(),
+                    parent_folder_id: session.parent_folder_id,
+                    size_bytes: session.size_bytes,
+                    part_size_bytes: session.part_size_bytes,
+                    checksum_sha256: session.checksum_sha256.clone(),
+                    parts_received,
+                    expires_at: session.upload_expires_at,
+                }
+            })
+            .collect::<Vec<_>>();
+        uploads.sort_by_key(|upload| std::cmp::Reverse(upload.expires_at));
+        Ok(uploads)
     }
 
     async fn record_upload_part(
@@ -1388,6 +1426,140 @@ async fn resumable_upload_rejects_missing_or_wrong_sized_parts() {
             .unwrap_err(),
         AppError::Domain(DomainError::InvalidFileState)
     );
+}
+
+#[tokio::test]
+async fn resumable_session_ttl_uses_configured_lifetime_and_expires_at_boundary() {
+    let repo = Arc::new(FakeFileRepository::default());
+    let storage = Arc::new(FakeObjectStorage::default());
+    let ids = Arc::new(SequenceIdGenerator::new([Uuid::new_v4()]));
+    let created_at = fixed_now();
+    let create_clock = Arc::new(FixedClock::new(created_at));
+    let part_size = MIN_RESUMABLE_PART_SIZE_BYTES;
+    let total_size = part_size;
+    let owner = user(Uuid::new_v4(), "ttl@example.com", 0, total_size);
+    let ttl_seconds = 86_400; // 24h decoupled from the 15 min presigned URL TTL
+
+    let created = CreateResumableUploadUseCase::new(
+        repo.clone(),
+        storage.clone(),
+        ids,
+        create_clock,
+        total_size,
+        ttl_seconds,
+    )
+    .execute(
+        &owner,
+        ResumableUploadRequest {
+            filename: "big.txt".to_string(),
+            parent_folder_id: None,
+            content_type: "text/plain".to_string(),
+            size_bytes: total_size,
+            checksum_sha256: None,
+            part_size_bytes: Some(part_size),
+        },
+    )
+    .await
+    .unwrap();
+
+    // The session lives for the full configured window, not the presigned URL TTL.
+    assert_eq!(
+        created.expires_at,
+        created_at + chrono::Duration::seconds(ttl_seconds)
+    );
+
+    let presign_url_ttl = 900;
+    let expires_at = created.expires_at;
+
+    // One second before expiry the session is still usable.
+    let before = Arc::new(FixedClock::new(expires_at - chrono::Duration::seconds(1)));
+    PresignUploadPartUseCase::new(repo.clone(), storage.clone(), before, presign_url_ttl)
+        .execute(
+            &owner,
+            PresignUploadPartInput {
+                file_id: created.file_id,
+                part_number: 1,
+            },
+        )
+        .await
+        .unwrap();
+
+    // Exactly at the boundary the session is expired (upload_expires_at <= now).
+    let at_boundary = Arc::new(FixedClock::new(expires_at));
+    assert_eq!(
+        PresignUploadPartUseCase::new(repo, storage, at_boundary, presign_url_ttl)
+            .execute(
+                &owner,
+                PresignUploadPartInput {
+                    file_id: created.file_id,
+                    part_number: 1,
+                },
+            )
+            .await
+            .unwrap_err(),
+        AppError::Domain(DomainError::InvalidFileState)
+    );
+}
+
+#[tokio::test]
+async fn list_pending_uploads_returns_active_sessions_with_part_counts() {
+    let repo = Arc::new(FakeFileRepository::default());
+    let storage = Arc::new(FakeObjectStorage::default());
+    let ids = Arc::new(SequenceIdGenerator::new([Uuid::new_v4()]));
+    let clock = Arc::new(FixedClock::new(fixed_now()));
+    let part_size = MIN_RESUMABLE_PART_SIZE_BYTES;
+    let total_size = part_size * 2 + 2;
+    let owner = user(Uuid::new_v4(), "pending@example.com", 0, total_size);
+
+    let created = CreateResumableUploadUseCase::new(
+        repo.clone(),
+        storage.clone(),
+        ids,
+        clock.clone(),
+        total_size,
+        86_400,
+    )
+    .execute(
+        &owner,
+        ResumableUploadRequest {
+            filename: "movie.txt".to_string(),
+            parent_folder_id: None,
+            content_type: "text/plain".to_string(),
+            size_bytes: total_size,
+            checksum_sha256: None,
+            part_size_bytes: Some(part_size),
+        },
+    )
+    .await
+    .unwrap();
+
+    let list = ListPendingUploadsUseCase::new(repo.clone(), clock.clone());
+    let before = list.execute(&owner).await.unwrap();
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0].file_id, created.file_id);
+    assert_eq!(before[0].parts_received, 0);
+    assert_eq!(before[0].size_bytes, total_size);
+    assert_eq!(before[0].part_size_bytes, part_size);
+
+    RecordUploadPartUseCase::new(repo.clone(), clock.clone())
+        .execute(
+            &owner,
+            RecordUploadPartInput {
+                file_id: created.file_id,
+                part_number: 1,
+                size_bytes: part_size,
+                etag: "\"etag-1\"".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let after_part = list.execute(&owner).await.unwrap();
+    assert_eq!(after_part[0].parts_received, 1);
+
+    // A different owner never sees these sessions.
+    let stranger = user(Uuid::new_v4(), "stranger@example.com", 0, total_size);
+    assert!(list.execute(&stranger).await.unwrap().is_empty());
 }
 
 #[tokio::test]

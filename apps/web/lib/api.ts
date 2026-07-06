@@ -128,6 +128,21 @@ export type PresignUploadPartResponse = {
   expected_size_bytes: number
 }
 
+export type PendingUploadRecord = {
+  file_id: string
+  filename: string
+  parent_folder_id: string | null
+  size_bytes: number
+  part_size_bytes: number
+  checksum_sha256: string | null
+  parts_received: number
+  expires_at: string
+}
+
+export type ListPendingUploadsResponse = {
+  uploads: PendingUploadRecord[]
+}
+
 export type ListFilesResponse = {
   files: FileRecord[]
 }
@@ -175,6 +190,23 @@ export class ApiError extends Error {
   ) {
     super(message)
     this.name = "ApiError"
+  }
+}
+
+// Thrown while PUTting a single multipart part to object storage, so the UI can
+// distinguish a transient network/storage failure from an API-level error.
+export class UploadPartError extends Error {
+  constructor(
+    public partNumber: number,
+    public reason: "network" | "http",
+    public status?: number
+  ) {
+    super(
+      reason === "http"
+        ? `Upload part ${partNumber} failed with status ${status ?? "unknown"}`
+        : `Upload part ${partNumber} failed`
+    )
+    this.name = "UploadPartError"
   }
 }
 
@@ -266,6 +298,7 @@ export function uploadFileDirect(
 export function uploadFilePart(
   uploadUrl: string,
   blob: Blob,
+  partNumber: number,
   onProgress?: (loaded: number, total: number) => void
 ): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -290,15 +323,15 @@ export function uploadFilePart(
         return
       }
 
-      reject(new Error(`Upload part failed with status ${xhr.status}`))
+      reject(new UploadPartError(partNumber, "http", xhr.status))
     })
 
     xhr.addEventListener("error", () => {
-      reject(new Error("Upload part failed"))
+      reject(new UploadPartError(partNumber, "network"))
     })
 
     xhr.addEventListener("abort", () => {
-      reject(new Error("Upload part aborted"))
+      reject(new UploadPartError(partNumber, "network"))
     })
 
     xhr.open("PUT", uploadUrl)
@@ -328,6 +361,8 @@ export const api = {
     }),
   getUploadStatus: (token: string, fileId: string) =>
     request<UploadStatusResponse>(`/files/uploads/${fileId}/status`, { token }),
+  listPendingUploads: (token: string) =>
+    request<ListPendingUploadsResponse>("/files/uploads/pending", { token }),
   presignUploadPart: (token: string, fileId: string, partNumber: number) =>
     request<PresignUploadPartResponse>(`/files/uploads/${fileId}/parts`, {
       method: "POST",

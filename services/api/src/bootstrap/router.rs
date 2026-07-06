@@ -33,6 +33,10 @@ pub fn build_router(state: AppState, cors: CorsConfig) -> Router {
             post(file_routes::expire_resumable_uploads),
         )
         .route(
+            "/files/uploads/pending",
+            get(file_routes::list_pending_uploads),
+        )
+        .route(
             "/files/uploads/{file_id}/status",
             get(file_routes::get_upload_status),
         )

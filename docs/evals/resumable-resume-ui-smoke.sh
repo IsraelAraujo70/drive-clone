@@ -89,6 +89,20 @@ function writeFixture() {
     },
   };
 
+  // Server-side pending list must report the fresh session before any resume.
+  const pendingBefore = await api("/files/uploads/pending", {
+    token: auth.token,
+  });
+  const listed = (pendingBefore.uploads ?? []).find(
+    (item) => item.file_id === upload.file_id,
+  );
+  if (!listed) {
+    throw new Error("expected new resumable session in GET /files/uploads/pending");
+  }
+  if (listed.parts_received !== 0) {
+    throw new Error(`expected 0 parts received, got ${listed.parts_received}`);
+  }
+
   const browser = await chromium.launch();
   const page = await browser.newPage();
   await page.addInitScript(
@@ -106,6 +120,10 @@ function writeFixture() {
   await page.getByText(filename).waitFor({ timeout: 15000 });
   await page
     .getByText("Select the same local file again to continue from the parts already saved.")
+    .waitFor({ timeout: 15000 });
+  // The recovery panel exposes a "Clear expired" control.
+  await page
+    .getByRole("button", { name: "Clear expired" })
     .waitFor({ timeout: 15000 });
 
   const chooserPromise = page.waitForEvent("filechooser");
@@ -135,6 +153,13 @@ function writeFixture() {
   });
   if (status.state !== "complete") {
     throw new Error(`expected original upload to complete, got ${status.state}`);
+  }
+  // Once finalized, the session must drop off the server pending list.
+  const pendingAfter = await api("/files/uploads/pending", {
+    token: auth.token,
+  });
+  if ((pendingAfter.uploads ?? []).some((item) => item.file_id === upload.file_id)) {
+    throw new Error("finalized upload still present in GET /files/uploads/pending");
   }
   await browser.close();
   console.log(`resumable resume UI smoke passed against ${webBaseUrl} (${upload.file_id})`);

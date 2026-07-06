@@ -571,6 +571,31 @@ Response `200`:
 }
 ```
 
+### `GET /files/uploads/pending`
+
+Authenticated. Lists the caller's own resumable sessions that are still `pending`
+and not expired, so the web client can recover interrupted uploads. The server is
+authoritative for existence and expiration.
+
+Response `200`:
+
+```json
+{
+  "uploads": [
+    {
+      "file_id": "uuid",
+      "filename": "video.mov",
+      "parent_folder_id": null,
+      "size_bytes": 6291493,
+      "part_size_bytes": 6291456,
+      "checksum_sha256": null,
+      "parts_received": 1,
+      "expires_at": "2026-07-06T19:30:00Z"
+    }
+  ]
+}
+```
+
 ### `POST /files/uploads/{file_id}/parts`
 
 Authenticated owner-only. Signs a direct object-storage PUT URL for one part.

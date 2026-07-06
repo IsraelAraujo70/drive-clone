@@ -13,8 +13,8 @@ use crate::application::ports::object_storage::{CompletedUploadPart, ObjectStora
 use crate::domain::auth::User;
 use crate::domain::error::DomainError;
 use crate::domain::files::{
-    FileState, ResumableUploadRequest, ResumableUploadSession, UploadPart, ensure_quota,
-    validate_checksum, validate_content_type, validate_filename, validate_size,
+    FileState, PendingUpload, ResumableUploadRequest, ResumableUploadSession, UploadPart,
+    ensure_quota, validate_checksum, validate_content_type, validate_filename, validate_size,
 };
 
 pub const DEFAULT_RESUMABLE_PART_SIZE_BYTES: i64 = 8 * 1024 * 1024;
@@ -171,6 +171,28 @@ impl GetUploadStatusUseCase {
             .find_resumable_upload(user.id, file_id)
             .await?
             .ok_or_else(|| DomainError::FileNotFound.into())
+    }
+}
+
+#[derive(Clone)]
+pub struct ListPendingUploadsUseCase {
+    file_repository: Arc<dyn FileRepository>,
+    clock: Arc<dyn Clock>,
+}
+
+impl ListPendingUploadsUseCase {
+    pub fn new(file_repository: Arc<dyn FileRepository>, clock: Arc<dyn Clock>) -> Self {
+        Self {
+            file_repository,
+            clock,
+        }
+    }
+
+    pub async fn execute(&self, user: &User) -> Result<Vec<PendingUpload>, AppError> {
+        self.file_repository
+            .list_pending_resumable_uploads(user.id, self.clock.now())
+            .await
+            .map_err(AppError::from)
     }
 }
 

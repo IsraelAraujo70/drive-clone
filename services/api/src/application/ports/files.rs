@@ -3,8 +3,8 @@ use uuid::Uuid;
 
 use crate::application::ports::RepositoryError;
 use crate::domain::files::{
-    ChangeLogEntry, DriveBrowse, DriveFile, FileShare, Folder, PendingFile, ResumableUploadSession,
-    SearchFileResult, SharedFile, UploadPart,
+    ChangeLogEntry, DriveBrowse, DriveFile, FileShare, Folder, PendingFile, PendingUpload,
+    ResumableUploadSession, SearchFileResult, SharedFile, UploadPart,
 };
 
 #[derive(Debug, Clone)]
@@ -102,6 +102,12 @@ pub trait FileRepository: Send + Sync {
         owner_id: Uuid,
         file_id: Uuid,
     ) -> Result<Option<ResumableUploadSession>, RepositoryError>;
+
+    async fn list_pending_resumable_uploads(
+        &self,
+        owner_id: Uuid,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<PendingUpload>, RepositoryError>;
 
     async fn record_upload_part(
         &self,

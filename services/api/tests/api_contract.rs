@@ -710,6 +710,88 @@ async fn shares_allow_grantee_download_and_can_be_listed_or_revoked(pool: PgPool
 }
 
 #[sqlx::test]
+async fn pending_uploads_lists_active_resumable_sessions_until_finalized(pool: PgPool) {
+    let storage = Arc::new(FakeObjectStorage::default());
+    let app = app_with_storage(pool, storage.clone());
+    let token = signup(app.clone(), "pending-uploads@example.com").await;
+
+    let size_bytes = 10;
+    let (status, created) = request(
+        app.clone(),
+        "POST",
+        "/files/uploads/resumable",
+        Some(&token),
+        Some(json!({
+            "filename": "backup.zip",
+            "parent_folder_id": null,
+            "content_type": "application/zip",
+            "size_bytes": size_bytes,
+            "checksum_sha256": null
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let file_id = created["file_id"].as_str().unwrap().to_string();
+    let object_key = created["object_key"].as_str().unwrap().to_string();
+
+    // No parts yet: pending list shows the session with parts_received = 0.
+    let (status, body) = request(
+        app.clone(),
+        "GET",
+        "/files/uploads/pending",
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let uploads = body["uploads"].as_array().unwrap();
+    assert_eq!(uploads.len(), 1);
+    assert_eq!(uploads[0]["file_id"], file_id);
+    assert_eq!(uploads[0]["filename"], "backup.zip");
+    assert_eq!(uploads[0]["size_bytes"], size_bytes);
+    assert_eq!(uploads[0]["parts_received"], 0);
+    assert_eq!(uploads[0]["parent_folder_id"], Value::Null);
+
+    // Record the single part.
+    let (status, _) = request(
+        app.clone(),
+        "POST",
+        &format!("/files/uploads/{file_id}/parts/1"),
+        Some(&token),
+        Some(json!({"size_bytes": size_bytes, "etag": "\"etag-1\""})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = request(
+        app.clone(),
+        "GET",
+        "/files/uploads/pending",
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["uploads"][0]["parts_received"], 1);
+
+    // Finalize the upload; it must then drop off the pending list.
+    storage.put_object(&object_key, size_bytes);
+    let (status, _) = request(
+        app.clone(),
+        "POST",
+        &format!("/files/uploads/{file_id}/finalize"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = request(app, "GET", "/files/uploads/pending", Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["uploads"].as_array().unwrap().len(), 0);
+}
+
+#[sqlx::test]
 async fn search_returns_accessible_files_without_leaking_private_or_deleted_items(pool: PgPool) {
     let storage = Arc::new(FakeObjectStorage::default());
     let app = app_with_storage(pool, storage.clone());
@@ -974,6 +1056,7 @@ async fn create_upload_validates_size_and_quota(pool: PgPool) {
         Arc::new(FakeObjectStorage::default()),
         5,
         900,
+        86_400,
     ));
     let (status, body) = request(
         app,

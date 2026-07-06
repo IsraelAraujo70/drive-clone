@@ -39,8 +39,9 @@ pub use restore_folder::RestoreFolderUseCase;
 pub use resumable_upload::{
     CreateResumableUploadOutput, CreateResumableUploadUseCase, ExpireResumableUploadsUseCase,
     ExpireUploadsOutput, FinalizeResumableUploadUseCase, GetUploadStatusUseCase,
-    MIN_RESUMABLE_PART_SIZE_BYTES, PresignUploadPartInput, PresignUploadPartOutput,
-    PresignUploadPartUseCase, RecordUploadPartInput, RecordUploadPartUseCase,
+    ListPendingUploadsUseCase, MIN_RESUMABLE_PART_SIZE_BYTES, PresignUploadPartInput,
+    PresignUploadPartOutput, PresignUploadPartUseCase, RecordUploadPartInput,
+    RecordUploadPartUseCase,
 };
 pub use revoke_share::RevokeShareUseCase;
 pub use search_files::{SearchFilesInput, SearchFilesUseCase};

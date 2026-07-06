@@ -77,6 +77,18 @@ pub struct PendingFile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingUpload {
+    pub file_id: Uuid,
+    pub filename: String,
+    pub parent_folder_id: Option<Uuid>,
+    pub size_bytes: i64,
+    pub part_size_bytes: i64,
+    pub checksum_sha256: Option<String>,
+    pub parts_received: i64,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UploadPart {
     pub part_number: i32,
     pub size_bytes: i64,

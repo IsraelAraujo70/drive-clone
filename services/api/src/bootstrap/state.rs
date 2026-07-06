@@ -10,10 +10,10 @@ use crate::application::files::{
     DownloadFileUseCase, ExpireResumableUploadsUseCase, FinalizeResumableUploadUseCase,
     GetUploadStatusUseCase, ListDriveTrashUseCase, ListFilesUseCase, ListFoldersUseCase,
     ListPendingUploadsUseCase, ListShareLinksUseCase, ListSharedWithMeUseCase, ListSharesUseCase,
-    ListSyncChangesUseCase, ListTrashUseCase, PresignUploadPartUseCase, RecordUploadPartUseCase,
-    ResolveShareLinkUseCase, RestoreFileUseCase, RestoreFolderUseCase, RevokeShareLinkUseCase,
-    RevokeShareUseCase, SearchFilesUseCase, ShareFileUseCase, UpdateFileUseCase,
-    UpdateFolderUseCase,
+    ListSyncChangesUseCase, ListTrashUseCase, PresignUploadPartUseCase, PurgeFileUseCase,
+    PurgeFolderUseCase, RecordUploadPartUseCase, ResolveShareLinkUseCase, RestoreFileUseCase,
+    RestoreFolderUseCase, RevokeShareLinkUseCase, RevokeShareUseCase, SearchFilesUseCase,
+    ShareFileUseCase, UpdateFileUseCase, UpdateFolderUseCase,
 };
 use crate::application::ports::auth::AuthRepository;
 use crate::application::ports::clock::{Clock, SystemClock};
@@ -49,6 +49,8 @@ pub struct AppState {
     pub delete_folder: DeleteFolderUseCase,
     pub restore_file: RestoreFileUseCase,
     pub restore_folder: RestoreFolderUseCase,
+    pub purge_file: PurgeFileUseCase,
+    pub purge_folder: PurgeFolderUseCase,
     pub list_trash: ListTrashUseCase,
     pub list_drive_trash: ListDriveTrashUseCase,
     pub share_file: ShareFileUseCase,
@@ -134,6 +136,8 @@ impl AppState {
             delete_folder: DeleteFolderUseCase::new(file_repository.clone()),
             restore_file: RestoreFileUseCase::new(file_repository.clone()),
             restore_folder: RestoreFolderUseCase::new(file_repository.clone()),
+            purge_file: PurgeFileUseCase::new(file_repository.clone(), storage.clone()),
+            purge_folder: PurgeFolderUseCase::new(file_repository.clone(), storage.clone()),
             list_trash: ListTrashUseCase::new(file_repository.clone()),
             list_drive_trash: ListDriveTrashUseCase::new(file_repository.clone()),
             share_file: ShareFileUseCase::new(file_repository.clone(), auth_repository.clone()),

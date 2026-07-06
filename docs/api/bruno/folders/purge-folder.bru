@@ -1,0 +1,27 @@
+meta {
+  name: Purge Folder
+  type: http
+  seq: 6
+}
+delete {
+  url: {{baseUrl}}/folders/{{folderId}}/purge
+  body: none
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([204, 401, 404, 502]).to.include(res.status);
+  });
+}
+
+docs {
+  Owner-only permanent delete for a folder already in trash. Deletes stored objects inside the tree, removes file and folder rows, and decrements storage usage.
+}

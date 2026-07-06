@@ -64,6 +64,7 @@ pub fn build_router(state: AppState, cors: CorsConfig) -> Router {
             delete(file_routes::delete_file).patch(file_routes::update_file),
         )
         .route("/files/{file_id}/restore", post(file_routes::restore_file))
+        .route("/files/{file_id}/purge", delete(file_routes::purge_file))
         .route(
             "/folders/{folder_id}",
             patch(file_routes::update_folder).delete(file_routes::delete_folder),
@@ -71,6 +72,10 @@ pub fn build_router(state: AppState, cors: CorsConfig) -> Router {
         .route(
             "/folders/{folder_id}/restore",
             post(file_routes::restore_folder),
+        )
+        .route(
+            "/folders/{folder_id}/purge",
+            delete(file_routes::purge_folder),
         )
         .route(
             "/files/{file_id}/shares",

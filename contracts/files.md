@@ -456,6 +456,13 @@ purge worker, otherwise `file_not_found`. Clears `deleted_at`.
 
 Response `200`: the full `FileResponse`.
 
+### DELETE /files/{file_id}/purge
+
+Owner-only. File must already be in trash. Deletes the object from storage,
+removes the file row permanently, and decrements `storage_used_bytes`.
+
+Response: `204 No Content`.
+
 ### GET /files/trash
 
 Returns the authenticated user's deleted files, most recently deleted first. Same shape as `GET /files` (each file has a non-null `deleted_at`).
@@ -473,6 +480,14 @@ Owner-only. Restores the folder tree deleted by that folder delete. Restore
 fails with `409 invalid_file_state` when the folder's parent is still deleted.
 
 Response `200`: `FolderResponse`.
+
+### DELETE /folders/{folder_id}/purge
+
+Owner-only. Folder must already be in trash. Deletes every stored object inside
+the folder tree, removes the file and folder rows permanently, and decrements
+quota for purged complete files.
+
+Response: `204 No Content`.
 
 ### GET /drive/trash
 

@@ -294,6 +294,14 @@ const folders = [
         docs: "Owner-only restore for the folder tree deleted by that folder delete. Fails if the parent remains deleted.",
         tests: ["expect([200, 401, 404, 409]).to.include(res.status);"],
       },
+      {
+        name: "Purge Folder",
+        method: "delete",
+        url: "{{baseUrl}}/folders/{{folderId}}/purge",
+        auth: "bearer",
+        docs: "Owner-only permanent delete for a folder already in trash. Deletes stored objects inside the tree, removes file and folder rows, and decrements storage usage.",
+        tests: ["expect([204, 401, 404, 502]).to.include(res.status);"],
+      },
     ],
   },
   {
@@ -475,6 +483,14 @@ const folders = [
         auth: "bearer",
         docs: "Owner-only restore for a file directly deleted by the owner. Clears deleted_at when the parent folder is active.",
         tests: ["expect([200, 401, 404]).to.include(res.status);"],
+      },
+      {
+        name: "Purge File",
+        method: "delete",
+        url: "{{baseUrl}}/files/{{fileId}}/purge",
+        auth: "bearer",
+        docs: "Owner-only permanent delete for a file already in trash. Deletes the stored object, removes the file row, and decrements storage usage.",
+        tests: ["expect([204, 401, 404, 502]).to.include(res.status);"],
       },
       {
         name: "List File Trash",

@@ -800,6 +800,7 @@ export function DriveShell() {
   const [downloadId, setDownloadId] = useState<string | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [restoreId, setRestoreId] = useState<string | null>(null)
+  const [purgeId, setPurgeId] = useState<string | null>(null)
   const [shareFile, setShareFile] = useState<FileRecord | null>(null)
   const [createFolderOpen, setCreateFolderOpen] = useState(false)
   const [renameTarget, setRenameTarget] = useState<DriveItem | null>(null)
@@ -1223,6 +1224,58 @@ export function DriveShell() {
       setError(getApiErrorMessage(caught))
     } finally {
       setRestoreId(null)
+    }
+  }
+
+  async function handlePurge(file: FileRecord) {
+    if (!token) {
+      setError("Your session expired. Log in again to delete files.")
+      return
+    }
+    if (
+      !window.confirm(
+        `Permanently delete ${file.filename}? This cannot be undone.`
+      )
+    ) {
+      return
+    }
+
+    setError(null)
+    setPurgeId(file.id)
+    try {
+      await api.purgeFile(token, file.id)
+      await refreshUser()
+      await loadActiveView()
+    } catch (caught) {
+      setError(getApiErrorMessage(caught))
+    } finally {
+      setPurgeId(null)
+    }
+  }
+
+  async function handlePurgeFolder(folder: FolderRecord) {
+    if (!token) {
+      setError("Your session expired. Log in again to delete folders.")
+      return
+    }
+    if (
+      !window.confirm(
+        `Permanently delete ${folder.name} and everything inside it? This cannot be undone.`
+      )
+    ) {
+      return
+    }
+
+    setError(null)
+    setPurgeId(folder.id)
+    try {
+      await api.purgeFolder(token, folder.id)
+      await refreshUser()
+      await loadActiveView()
+    } catch (caught) {
+      setError(getApiErrorMessage(caught))
+    } finally {
+      setPurgeId(null)
     }
   }
 
@@ -1695,19 +1748,40 @@ export function DriveShell() {
                             </DropdownMenuContent>
                           </DropdownMenu>
                         ) : (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => void handleRestoreFolder(folder.id)}
-                            disabled={restoreId === folder.id}
-                          >
-                            {restoreId === folder.id ? (
-                              <Spinner data-icon="inline-start" />
-                            ) : (
-                              <RotateCcw data-icon="inline-start" />
-                            )}
-                            Restore
-                          </Button>
+                          <div className="flex shrink-0 flex-wrap justify-end gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => void handleRestoreFolder(folder.id)}
+                              disabled={
+                                restoreId === folder.id ||
+                                purgeId === folder.id
+                              }
+                            >
+                              {restoreId === folder.id ? (
+                                <Spinner data-icon="inline-start" />
+                              ) : (
+                                <RotateCcw data-icon="inline-start" />
+                              )}
+                              Restore
+                            </Button>
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              onClick={() => void handlePurgeFolder(folder)}
+                              disabled={
+                                purgeId === folder.id ||
+                                restoreId === folder.id
+                              }
+                            >
+                              {purgeId === folder.id ? (
+                                <Spinner data-icon="inline-start" />
+                              ) : (
+                                <Trash2 data-icon="inline-start" />
+                              )}
+                              Force delete
+                            </Button>
+                          </div>
                         )}
                       </div>
                     ))}
@@ -1808,19 +1882,38 @@ export function DriveShell() {
                             </>
                           )}
                           {activeView === "trash" && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => void handleRestore(file.id)}
-                              disabled={restoreId === file.id}
-                            >
-                              {restoreId === file.id ? (
-                                <Spinner data-icon="inline-start" />
-                              ) : (
-                                <RotateCcw data-icon="inline-start" />
-                              )}
-                              Restore
-                            </Button>
+                            <>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => void handleRestore(file.id)}
+                                disabled={
+                                  restoreId === file.id || purgeId === file.id
+                                }
+                              >
+                                {restoreId === file.id ? (
+                                  <Spinner data-icon="inline-start" />
+                                ) : (
+                                  <RotateCcw data-icon="inline-start" />
+                                )}
+                                Restore
+                              </Button>
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                onClick={() => void handlePurge(file)}
+                                disabled={
+                                  purgeId === file.id || restoreId === file.id
+                                }
+                              >
+                                {purgeId === file.id ? (
+                                  <Spinner data-icon="inline-start" />
+                                ) : (
+                                  <Trash2 data-icon="inline-start" />
+                                )}
+                                Force delete
+                              </Button>
+                            </>
                           )}
                         </div>
                       </div>

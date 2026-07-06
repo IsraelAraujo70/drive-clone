@@ -269,7 +269,7 @@ describe("api client", () => {
     })
   })
 
-  it("renames, moves, deletes, restores folders and lists drive trash", async () => {
+  it("renames, moves, deletes, purges, restores folders and lists drive trash", async () => {
     const folder = {
       id: "folder-1",
       name: "Projects",
@@ -299,6 +299,7 @@ describe("api client", () => {
       )
       .mockResolvedValueOnce(jsonResponse(200, { ...folder, name: "Work" }))
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce(jsonResponse(200, folder))
       .mockResolvedValueOnce(
         jsonResponse(200, {
@@ -326,6 +327,9 @@ describe("api client", () => {
       api.deleteFolder("secret-token", "folder-1")
     ).resolves.toBeUndefined()
     await expect(
+      api.purgeFolder("secret-token", "folder-1")
+    ).resolves.toBeUndefined()
+    await expect(
       api.restoreFolder("secret-token", "folder-1")
     ).resolves.toEqual(folder)
     await expect(api.listDriveTrash("secret-token")).resolves.toEqual({
@@ -339,6 +343,7 @@ describe("api client", () => {
       `${API_BASE_URL}/files/file-1`,
       `${API_BASE_URL}/folders/folder-1`,
       `${API_BASE_URL}/folders/folder-1`,
+      `${API_BASE_URL}/folders/folder-1/purge`,
       `${API_BASE_URL}/folders/folder-1/restore`,
       `${API_BASE_URL}/drive/trash`,
     ])
@@ -348,6 +353,7 @@ describe("api client", () => {
       parent_folder_id: null,
     })
     expect(fetchMock.mock.calls[2][1].method).toBe("DELETE")
+    expect(fetchMock.mock.calls[3][1].method).toBe("DELETE")
   })
 
   it("completes uploads, lists files, and requests download URLs", async () => {
@@ -401,7 +407,7 @@ describe("api client", () => {
     )
   })
 
-  it("soft deletes, restores, and lists trash files", async () => {
+  it("soft deletes, purges, restores, and lists trash files", async () => {
     const trashFile = {
       id: "file-1",
       filename: "report.pdf",
@@ -420,12 +426,16 @@ describe("api client", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce(jsonResponse(200, restoredFile))
       .mockResolvedValueOnce(jsonResponse(200, { files: [trashFile] }))
     vi.stubGlobal("fetch", fetchMock)
 
     await expect(
       api.deleteFile("secret-token", "file-1")
+    ).resolves.toBeUndefined()
+    await expect(
+      api.purgeFile("secret-token", "file-1")
     ).resolves.toBeUndefined()
     await expect(api.restoreFile("secret-token", "file-1")).resolves.toEqual(
       restoredFile
@@ -436,12 +446,14 @@ describe("api client", () => {
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       `${API_BASE_URL}/files/file-1`,
+      `${API_BASE_URL}/files/file-1/purge`,
       `${API_BASE_URL}/files/file-1/restore`,
       `${API_BASE_URL}/files/trash`,
     ])
     expect(fetchMock.mock.calls[0][1].method).toBe("DELETE")
-    expect(fetchMock.mock.calls[1][1].method).toBe("POST")
-    expect(fetchMock.mock.calls[2][1].headers.Authorization).toBe(
+    expect(fetchMock.mock.calls[1][1].method).toBe("DELETE")
+    expect(fetchMock.mock.calls[2][1].method).toBe("POST")
+    expect(fetchMock.mock.calls[3][1].headers.Authorization).toBe(
       "Bearer secret-token"
     )
   })

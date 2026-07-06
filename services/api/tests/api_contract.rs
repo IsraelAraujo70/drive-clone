@@ -1364,6 +1364,128 @@ async fn purge_trash_deletes_bucket_row_and_quota_but_keeps_sync_tombstone(pool:
 }
 
 #[sqlx::test]
+async fn manual_purge_file_deletes_bucket_row_and_quota_immediately(pool: PgPool) {
+    let storage = Arc::new(FakeObjectStorage::default());
+    let app = app_with_storage(pool.clone(), storage.clone());
+    let token = signup(app.clone(), "manual-purge-file@example.com").await;
+    let (file_id, object_key) =
+        create_completed_file(app.clone(), storage.clone(), &token, 12).await;
+
+    let (status, _) = request(
+        app.clone(),
+        "DELETE",
+        &format!("/files/{file_id}"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _) = request(
+        app.clone(),
+        "DELETE",
+        &format!("/files/{file_id}/purge"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(!storage.has_object(&object_key));
+
+    let file_uuid = Uuid::parse_str(&file_id).unwrap();
+    let file_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM files WHERE id = $1")
+        .bind(file_uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(file_count, 0);
+
+    let used: i64 = sqlx::query_scalar("SELECT storage_used_bytes FROM users WHERE email = $1")
+        .bind("manual-purge-file@example.com")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(used, 0);
+
+    let (status, trash) = request(app, "GET", "/drive/trash", Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(trash["files"].as_array().unwrap().is_empty());
+}
+
+#[sqlx::test]
+async fn manual_purge_folder_deletes_tree_bucket_rows_and_quota(pool: PgPool) {
+    let storage = Arc::new(FakeObjectStorage::default());
+    let app = app_with_storage(pool.clone(), storage.clone());
+    let token = signup(app.clone(), "manual-purge-folder@example.com").await;
+
+    let folder_id = create_folder(app.clone(), &token, "Archive", None).await;
+    let (status, upload) = request(
+        app.clone(),
+        "POST",
+        "/files/uploads",
+        Some(&token),
+        Some(upload_body_in_folder(12, Some(&folder_id))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let file_id = upload["file_id"].as_str().unwrap().to_string();
+    let object_key = upload["object_key"].as_str().unwrap().to_string();
+    storage.put_object(&object_key, 12);
+    let (status, _) = request(
+        app.clone(),
+        "POST",
+        &format!("/files/{file_id}/complete"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = request(
+        app.clone(),
+        "DELETE",
+        &format!("/folders/{folder_id}"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _) = request(
+        app.clone(),
+        "DELETE",
+        &format!("/folders/{folder_id}/purge"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(!storage.has_object(&object_key));
+
+    let file_uuid = Uuid::parse_str(&file_id).unwrap();
+    let folder_uuid = Uuid::parse_str(&folder_id).unwrap();
+    let file_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM files WHERE id = $1")
+        .bind(file_uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(file_count, 0);
+    let folder_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM folders WHERE id = $1")
+        .bind(folder_uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(folder_count, 0);
+
+    let used: i64 = sqlx::query_scalar("SELECT storage_used_bytes FROM users WHERE email = $1")
+        .bind("manual-purge-folder@example.com")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(used, 0);
+}
+
+#[sqlx::test]
 async fn purge_claim_blocks_duplicate_workers_and_restore_until_released(pool: PgPool) {
     let storage = Arc::new(FakeObjectStorage::default());
     let app = app_with_storage(pool.clone(), storage.clone());

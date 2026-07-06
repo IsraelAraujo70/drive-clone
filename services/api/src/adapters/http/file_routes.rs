@@ -215,6 +215,15 @@ pub async fn restore_file(
     Ok(Json(FileResponse::from(file)))
 }
 
+pub async fn purge_file(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(file_id): Path<Uuid>,
+) -> Result<impl IntoResponse, HttpError> {
+    state.purge_file.execute(&auth.user, file_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub async fn list_trash(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
@@ -260,6 +269,15 @@ pub async fn restore_folder(
 ) -> Result<Json<FolderResponse>, HttpError> {
     let folder = state.restore_folder.execute(&auth.user, folder_id).await?;
     Ok(Json(FolderResponse::from(folder)))
+}
+
+pub async fn purge_folder(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(folder_id): Path<Uuid>,
+) -> Result<impl IntoResponse, HttpError> {
+    state.purge_folder.execute(&auth.user, folder_id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn share_file(

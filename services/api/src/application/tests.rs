@@ -28,9 +28,9 @@ use crate::application::ports::auth::{AuthRepository, CreateUserRecord};
 use crate::application::ports::clock::{Clock, FixedClock};
 use crate::application::ports::files::{
     CreateFolderRecord, CreatePendingFileRecord, CreateResumableUploadRecord,
-    CreateShareLinkRecord, ExpiredUploadRecord, FileRepository, PurgeableFile, PurgedFile,
-    QuotaDivergence, ReconcileQuotaBatch, RecordUploadPartRecord, SearchFilesRecord,
-    UpdateFileRecord, UpdateFolderRecord,
+    CreateShareLinkRecord, ExpiredUploadRecord, FileRepository, ManualPurgeFileTarget,
+    PurgeableFile, PurgedFile, QuotaDivergence, ReconcileQuotaBatch, RecordUploadPartRecord,
+    SearchFilesRecord, UpdateFileRecord, UpdateFolderRecord,
 };
 use crate::application::ports::id_generator::SequenceIdGenerator;
 use crate::domain::auth::{User, UserWithPassword, hash_password, hash_token};
@@ -1229,6 +1229,135 @@ impl FileRepository for FakeFileRepository {
             removed += 1;
         }
         Ok(removed)
+    }
+
+    async fn find_manual_purge_file_target(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+    ) -> Result<Option<ManualPurgeFileTarget>, RepositoryError> {
+        if self.owners.lock().unwrap().get(&file_id).copied() != Some(owner_id) {
+            return Ok(None);
+        }
+
+        Ok(self
+            .completed
+            .lock()
+            .unwrap()
+            .get(&file_id)
+            .filter(|file| file.deleted_at.is_some())
+            .map(|file| ManualPurgeFileTarget {
+                file_id,
+                object_key: file.object_key.clone(),
+            }))
+    }
+
+    async fn manual_purge_file(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+    ) -> Result<Option<PurgedFile>, RepositoryError> {
+        if self.owners.lock().unwrap().get(&file_id).copied() != Some(owner_id) {
+            return Ok(None);
+        }
+        if !self
+            .completed
+            .lock()
+            .unwrap()
+            .get(&file_id)
+            .is_some_and(|file| file.deleted_at.is_some())
+        {
+            return Ok(None);
+        }
+
+        let Some(file) = self.completed.lock().unwrap().remove(&file_id) else {
+            return Ok(None);
+        };
+        self.owners.lock().unwrap().remove(&file_id);
+        self.purge_claims.lock().unwrap().remove(&file_id);
+        let mut storage_used = self.storage_used.lock().unwrap();
+        let current = storage_used.get(&owner_id).copied().unwrap_or_default();
+        storage_used.insert(owner_id, (current - file.size_bytes).max(0));
+        Ok(Some(PurgedFile {
+            owner_id,
+            size_bytes: file.size_bytes,
+        }))
+    }
+
+    async fn find_manual_purge_folder_targets(
+        &self,
+        owner_id: Uuid,
+        folder_id: Uuid,
+    ) -> Result<Option<Vec<ManualPurgeFileTarget>>, RepositoryError> {
+        if self.folder_owners.lock().unwrap().get(&folder_id).copied() != Some(owner_id) {
+            return Ok(None);
+        }
+        if !self
+            .folders
+            .lock()
+            .unwrap()
+            .get(&folder_id)
+            .is_some_and(|folder| folder.deleted_at.is_some())
+        {
+            return Ok(None);
+        }
+
+        let mut tree = self.folder_descendants(folder_id);
+        tree.push(folder_id);
+        Ok(Some(
+            self.completed
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|file| file.parent_folder_id.is_some_and(|id| tree.contains(&id)))
+                .map(|file| ManualPurgeFileTarget {
+                    file_id: file.id,
+                    object_key: file.object_key.clone(),
+                })
+                .collect(),
+        ))
+    }
+
+    async fn manual_purge_folder_tree(
+        &self,
+        owner_id: Uuid,
+        folder_id: Uuid,
+    ) -> Result<bool, RepositoryError> {
+        if self.folder_owners.lock().unwrap().get(&folder_id).copied() != Some(owner_id) {
+            return Ok(false);
+        }
+        if !self
+            .folders
+            .lock()
+            .unwrap()
+            .get(&folder_id)
+            .is_some_and(|folder| folder.deleted_at.is_some())
+        {
+            return Ok(false);
+        }
+
+        let mut tree = self.folder_descendants(folder_id);
+        tree.push(folder_id);
+        let file_ids = self
+            .completed
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|file| file.parent_folder_id.is_some_and(|id| tree.contains(&id)))
+            .map(|file| file.id)
+            .collect::<Vec<_>>();
+        for file_id in file_ids {
+            let _ = self.manual_purge_file(owner_id, file_id).await?;
+        }
+        {
+            let mut folders = self.folders.lock().unwrap();
+            let mut folder_owners = self.folder_owners.lock().unwrap();
+            for id in tree {
+                folders.remove(&id);
+                folder_owners.remove(&id);
+            }
+        }
+        Ok(true)
     }
 
     async fn all_object_keys(&self) -> Result<std::collections::HashSet<String>, RepositoryError> {

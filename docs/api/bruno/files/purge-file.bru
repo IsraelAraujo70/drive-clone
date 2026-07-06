@@ -1,0 +1,27 @@
+meta {
+  name: Purge File
+  type: http
+  seq: 16
+}
+delete {
+  url: {{baseUrl}}/files/{{fileId}}/purge
+  body: none
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([204, 401, 404, 502]).to.include(res.status);
+  });
+}
+
+docs {
+  Owner-only permanent delete for a file already in trash. Deletes the stored object, removes the file row, and decrements storage usage.
+}

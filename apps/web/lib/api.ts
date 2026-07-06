@@ -454,6 +454,10 @@ export const api = {
     request<void>(`/files/${fileId}`, { method: "DELETE", token }),
   deleteFolder: (token: string, folderId: string) =>
     request<void>(`/folders/${folderId}`, { method: "DELETE", token }),
+  purgeFile: (token: string, fileId: string) =>
+    request<void>(`/files/${fileId}/purge`, { method: "DELETE", token }),
+  purgeFolder: (token: string, folderId: string) =>
+    request<void>(`/folders/${folderId}/purge`, { method: "DELETE", token }),
   restoreFile: (token: string, fileId: string) =>
     request<FileRecord>(`/files/${fileId}/restore`, { method: "POST", token }),
   restoreFolder: (token: string, folderId: string) =>

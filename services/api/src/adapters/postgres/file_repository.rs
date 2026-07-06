@@ -7,9 +7,9 @@ use crate::adapters::postgres::tx::map_sqlx_error;
 use crate::application::ports::RepositoryError;
 use crate::application::ports::files::{
     CreateFolderRecord, CreatePendingFileRecord, CreateResumableUploadRecord,
-    CreateShareLinkRecord, ExpiredUploadRecord, FileRepository, PurgeableFile, PurgedFile,
-    QuotaDivergence, ReconcileQuotaBatch, RecordUploadPartRecord, SearchFilesRecord,
-    UpdateFileRecord, UpdateFolderRecord,
+    CreateShareLinkRecord, ExpiredUploadRecord, FileRepository, ManualPurgeFileTarget,
+    PurgeableFile, PurgedFile, QuotaDivergence, ReconcileQuotaBatch, RecordUploadPartRecord,
+    SearchFilesRecord, UpdateFileRecord, UpdateFolderRecord,
 };
 use crate::domain::files::{
     ChangeEntityType, ChangeLogEntry, ChangeOp, DriveBrowse, DriveFile, FileShare, FileState,
@@ -1974,6 +1974,240 @@ impl FileRepository for PostgresFileRepository {
             removed += count as usize;
         }
         Ok(removed)
+    }
+
+    async fn find_manual_purge_file_target(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+    ) -> Result<Option<ManualPurgeFileTarget>, RepositoryError> {
+        let row: Option<(Uuid, String)> = sqlx::query_as(
+            "SELECT id, object_key
+             FROM files
+             WHERE id = $1
+               AND owner_id = $2
+               AND state = 'complete'
+               AND deleted_at IS NOT NULL",
+        )
+        .bind(file_id)
+        .bind(owner_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        Ok(row.map(|(file_id, object_key)| ManualPurgeFileTarget {
+            file_id,
+            object_key,
+        }))
+    }
+
+    async fn manual_purge_file(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+    ) -> Result<Option<PurgedFile>, RepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let deleted: Option<i64> = sqlx::query_scalar(
+            "DELETE FROM files
+             WHERE id = $1
+               AND owner_id = $2
+               AND state = 'complete'
+               AND deleted_at IS NOT NULL
+             RETURNING size_bytes",
+        )
+        .bind(file_id)
+        .bind(owner_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        let Some(size_bytes) = deleted else {
+            tx.commit().await.map_err(map_sqlx_error)?;
+            return Ok(None);
+        };
+
+        sqlx::query(
+            "UPDATE users
+             SET storage_used_bytes = GREATEST(0, storage_used_bytes - $1)
+             WHERE id = $2",
+        )
+        .bind(size_bytes)
+        .bind(owner_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(Some(PurgedFile {
+            owner_id,
+            size_bytes,
+        }))
+    }
+
+    async fn find_manual_purge_folder_targets(
+        &self,
+        owner_id: Uuid,
+        folder_id: Uuid,
+    ) -> Result<Option<Vec<ManualPurgeFileTarget>>, RepositoryError> {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                SELECT 1
+                FROM folders
+                WHERE id = $1
+                  AND owner_id = $2
+                  AND deleted_at IS NOT NULL
+             )",
+        )
+        .bind(folder_id)
+        .bind(owner_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        if !exists {
+            return Ok(None);
+        }
+
+        let rows: Vec<(Uuid, String)> = sqlx::query_as(
+            "WITH RECURSIVE descendants AS (
+                SELECT id
+                FROM folders
+                WHERE id = $1 AND owner_id = $2
+                UNION ALL
+                SELECT child.id
+                FROM folders child
+                JOIN descendants d ON child.parent_folder_id = d.id
+                WHERE child.owner_id = $2
+             )
+             SELECT id, object_key
+             FROM files
+             WHERE owner_id = $2
+               AND state = 'complete'
+               AND parent_folder_id IN (SELECT id FROM descendants)
+             ORDER BY id",
+        )
+        .bind(folder_id)
+        .bind(owner_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        Ok(Some(
+            rows.into_iter()
+                .map(|(file_id, object_key)| ManualPurgeFileTarget {
+                    file_id,
+                    object_key,
+                })
+                .collect(),
+        ))
+    }
+
+    async fn manual_purge_folder_tree(
+        &self,
+        owner_id: Uuid,
+        folder_id: Uuid,
+    ) -> Result<bool, RepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                SELECT 1
+                FROM folders
+                WHERE id = $1
+                  AND owner_id = $2
+                  AND deleted_at IS NOT NULL
+                FOR UPDATE
+             )",
+        )
+        .bind(folder_id)
+        .bind(owner_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        if !exists {
+            tx.commit().await.map_err(map_sqlx_error)?;
+            return Ok(false);
+        }
+
+        let purged_bytes: i64 = sqlx::query_scalar(
+            "WITH RECURSIVE descendants AS (
+                SELECT id
+                FROM folders
+                WHERE id = $1 AND owner_id = $2
+                UNION ALL
+                SELECT child.id
+                FROM folders child
+                JOIN descendants d ON child.parent_folder_id = d.id
+                WHERE child.owner_id = $2
+             ),
+             deleted AS (
+                DELETE FROM files
+                WHERE owner_id = $2
+                  AND parent_folder_id IN (SELECT id FROM descendants)
+                RETURNING size_bytes, state
+             )
+             SELECT COALESCE(SUM(size_bytes) FILTER (WHERE state = 'complete'), 0)::BIGINT
+             FROM deleted",
+        )
+        .bind(folder_id)
+        .bind(owner_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        if purged_bytes > 0 {
+            sqlx::query(
+                "UPDATE users
+                 SET storage_used_bytes = GREATEST(0, storage_used_bytes - $1)
+                 WHERE id = $2",
+            )
+            .bind(purged_bytes)
+            .bind(owner_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        }
+
+        loop {
+            let removed_count: i64 = sqlx::query_scalar(
+                "WITH RECURSIVE descendants AS (
+                    SELECT id
+                    FROM folders
+                    WHERE id = $1 AND owner_id = $2
+                    UNION ALL
+                    SELECT child.id
+                    FROM folders child
+                    JOIN descendants d ON child.parent_folder_id = d.id
+                    WHERE child.owner_id = $2
+                 ),
+                 removed AS (
+                    DELETE FROM folders parent
+                    WHERE parent.owner_id = $2
+                      AND parent.id IN (SELECT id FROM descendants)
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM folders child
+                          WHERE child.parent_folder_id = parent.id
+                            AND child.owner_id = $2
+                      )
+                    RETURNING parent.id
+                 )
+                 SELECT COUNT(*)::BIGINT FROM removed",
+            )
+            .bind(folder_id)
+            .bind(owner_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+
+            if removed_count == 0 {
+                break;
+            }
+        }
+
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(true)
     }
 
     async fn all_object_keys(&self) -> Result<std::collections::HashSet<String>, RepositoryError> {

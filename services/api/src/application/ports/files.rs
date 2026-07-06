@@ -66,6 +66,12 @@ pub struct PurgeableFile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManualPurgeFileTarget {
+    pub file_id: Uuid,
+    pub object_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PurgedFile {
     pub owner_id: Uuid,
     pub size_bytes: i64,
@@ -186,6 +192,30 @@ pub trait FileRepository: Send + Sync {
         &self,
         cutoff: DateTime<Utc>,
     ) -> Result<usize, RepositoryError>;
+
+    async fn find_manual_purge_file_target(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+    ) -> Result<Option<ManualPurgeFileTarget>, RepositoryError>;
+
+    async fn manual_purge_file(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+    ) -> Result<Option<PurgedFile>, RepositoryError>;
+
+    async fn find_manual_purge_folder_targets(
+        &self,
+        owner_id: Uuid,
+        folder_id: Uuid,
+    ) -> Result<Option<Vec<ManualPurgeFileTarget>>, RepositoryError>;
+
+    async fn manual_purge_folder_tree(
+        &self,
+        owner_id: Uuid,
+        folder_id: Uuid,
+    ) -> Result<bool, RepositoryError>;
 
     async fn all_object_keys(&self) -> Result<std::collections::HashSet<String>, RepositoryError>;
 

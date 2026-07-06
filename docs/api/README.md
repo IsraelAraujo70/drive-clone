@@ -441,6 +441,18 @@ Responses:
 - `404 file_not_found`
 - `409 invalid_file_state` when parent remains deleted
 
+### `DELETE /folders/{folder_id}/purge`
+
+Authenticated owner-only permanent delete for a folder already in trash. Deletes
+stored objects inside the tree, removes file and folder rows, and decrements
+storage usage for purged complete files.
+
+Responses:
+
+- `204`
+- `404 file_not_found`
+- `502 storage_error` when object storage delete fails
+
 ## Files
 
 Current upload scope: new clients should use resumable multipart uploads. The
@@ -713,6 +725,17 @@ Responses:
 
 - `200`: `File`
 - `404 file_not_found`
+
+### `DELETE /files/{file_id}/purge`
+
+Authenticated owner-only permanent delete for a file already in trash. Deletes
+the stored object, removes the file row, and decrements storage usage.
+
+Responses:
+
+- `204`
+- `404 file_not_found`
+- `502 storage_error` when object storage delete fails
 
 ### `GET /files/trash`
 

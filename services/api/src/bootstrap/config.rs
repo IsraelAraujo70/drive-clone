@@ -4,6 +4,7 @@ use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
 pub const DEFAULT_MAX_FILE_SIZE_BYTES: i64 = 15 * 1024 * 1024 * 1024;
 pub const DEFAULT_PRESIGNED_URL_TTL_SECONDS: i64 = 900;
+pub const DEFAULT_RESUMABLE_UPLOAD_TTL_SECONDS: i64 = 86_400;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -12,6 +13,7 @@ pub struct Config {
     pub database_url: String,
     pub max_file_size_bytes: i64,
     pub presigned_url_ttl_seconds: i64,
+    pub resumable_upload_ttl_seconds: i64,
 }
 
 impl Config {
@@ -25,6 +27,10 @@ impl Config {
                 "PRESIGNED_URL_TTL_SECONDS",
                 DEFAULT_PRESIGNED_URL_TTL_SECONDS,
             ),
+            resumable_upload_ttl_seconds: env_i64(
+                "RESUMABLE_UPLOAD_TTL_SECONDS",
+                DEFAULT_RESUMABLE_UPLOAD_TTL_SECONDS,
+            ),
         }
     }
 
@@ -37,6 +43,10 @@ impl Config {
             presigned_url_ttl_seconds: env_i64(
                 "PRESIGNED_URL_TTL_SECONDS",
                 DEFAULT_PRESIGNED_URL_TTL_SECONDS,
+            ),
+            resumable_upload_ttl_seconds: env_i64(
+                "RESUMABLE_UPLOAD_TTL_SECONDS",
+                DEFAULT_RESUMABLE_UPLOAD_TTL_SECONDS,
             ),
         }
     }

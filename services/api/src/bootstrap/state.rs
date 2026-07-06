@@ -8,10 +8,10 @@ use crate::application::files::{
     BrowseFolderUseCase, CompleteUploadUseCase, CreateFolderUseCase, CreateResumableUploadUseCase,
     CreateUploadUseCase, DeleteFileUseCase, DeleteFolderUseCase, DownloadFileUseCase,
     ExpireResumableUploadsUseCase, FinalizeResumableUploadUseCase, GetUploadStatusUseCase,
-    ListDriveTrashUseCase, ListFilesUseCase, ListFoldersUseCase, ListSharedWithMeUseCase,
-    ListSharesUseCase, ListTrashUseCase, PresignUploadPartUseCase, RecordUploadPartUseCase,
-    RestoreFileUseCase, RestoreFolderUseCase, RevokeShareUseCase, SearchFilesUseCase,
-    ShareFileUseCase, UpdateFileUseCase, UpdateFolderUseCase,
+    ListDriveTrashUseCase, ListFilesUseCase, ListFoldersUseCase, ListPendingUploadsUseCase,
+    ListSharedWithMeUseCase, ListSharesUseCase, ListTrashUseCase, PresignUploadPartUseCase,
+    RecordUploadPartUseCase, RestoreFileUseCase, RestoreFolderUseCase, RevokeShareUseCase,
+    SearchFilesUseCase, ShareFileUseCase, UpdateFileUseCase, UpdateFolderUseCase,
 };
 use crate::application::ports::auth::AuthRepository;
 use crate::application::ports::clock::{Clock, SystemClock};
@@ -29,6 +29,7 @@ pub struct AppState {
     pub create_upload: CreateUploadUseCase,
     pub create_resumable_upload: CreateResumableUploadUseCase,
     pub get_upload_status: GetUploadStatusUseCase,
+    pub list_pending_uploads: ListPendingUploadsUseCase,
     pub presign_upload_part: PresignUploadPartUseCase,
     pub record_upload_part: RecordUploadPartUseCase,
     pub finalize_resumable_upload: FinalizeResumableUploadUseCase,
@@ -60,6 +61,7 @@ impl AppState {
         storage: Arc<dyn ObjectStorage>,
         max_file_size_bytes: i64,
         presigned_url_ttl_seconds: i64,
+        resumable_upload_ttl_seconds: i64,
     ) -> Self {
         let auth_repository: Arc<dyn AuthRepository> =
             Arc::new(PostgresAuthRepository::new(pool.clone()));
@@ -87,9 +89,13 @@ impl AppState {
                 id_generator,
                 clock.clone(),
                 max_file_size_bytes,
-                presigned_url_ttl_seconds,
+                resumable_upload_ttl_seconds,
             ),
             get_upload_status: GetUploadStatusUseCase::new(file_repository.clone()),
+            list_pending_uploads: ListPendingUploadsUseCase::new(
+                file_repository.clone(),
+                clock.clone(),
+            ),
             presign_upload_part: PresignUploadPartUseCase::new(
                 file_repository.clone(),
                 storage.clone(),

@@ -12,7 +12,7 @@ use crate::application::ports::files::{
 };
 use crate::domain::files::{
     DriveBrowse, DriveFile, FileShare, FileState, FileUser, Folder, FolderPathEntry, PendingFile,
-    ResumableUploadSession, SearchAccess, SearchFileResult, SharedFile, UploadPart,
+    PendingUpload, ResumableUploadSession, SearchAccess, SearchFileResult, SharedFile, UploadPart,
 };
 
 #[derive(Debug, Clone)]
@@ -164,6 +164,33 @@ impl ResumableUploadRow {
             updated_at: self.updated_at,
             completed_at: self.completed_at,
             parts,
+        }
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct PendingUploadRow {
+    id: Uuid,
+    filename: String,
+    parent_folder_id: Option<Uuid>,
+    size_bytes: i64,
+    part_size_bytes: i64,
+    checksum_sha256: Option<String>,
+    upload_expires_at: DateTime<Utc>,
+    parts_received: i64,
+}
+
+impl From<PendingUploadRow> for PendingUpload {
+    fn from(row: PendingUploadRow) -> Self {
+        Self {
+            file_id: row.id,
+            filename: row.filename,
+            parent_folder_id: row.parent_folder_id,
+            size_bytes: row.size_bytes,
+            part_size_bytes: row.part_size_bytes,
+            checksum_sha256: row.checksum_sha256,
+            parts_received: row.parts_received,
+            expires_at: row.upload_expires_at,
         }
     }
 }
@@ -494,6 +521,31 @@ impl FileRepository for PostgresFileRepository {
         .collect();
 
         Ok(Some(row.into_session(parts)))
+    }
+
+    async fn list_pending_resumable_uploads(
+        &self,
+        owner_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<PendingUpload>, RepositoryError> {
+        let rows = sqlx::query_as::<_, PendingUploadRow>(
+            "SELECT f.id, f.filename, f.parent_folder_id, f.size_bytes, f.part_size_bytes,
+                f.checksum_sha256, f.upload_expires_at,
+                (SELECT COUNT(*) FROM upload_parts up WHERE up.file_id = f.id) AS parts_received
+             FROM files f
+             WHERE f.owner_id = $1
+               AND f.state = 'pending'
+               AND f.upload_kind = 'resumable'
+               AND f.upload_expires_at > $2
+             ORDER BY f.created_at DESC",
+        )
+        .bind(owner_id)
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
     }
 
     async fn record_upload_part(

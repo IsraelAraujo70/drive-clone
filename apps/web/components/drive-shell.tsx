@@ -96,15 +96,20 @@ import { useAuth } from "@/lib/auth"
 import { formatBytes } from "@/lib/format"
 import { useModifierSymbol } from "@/lib/platform"
 import {
+  clearExpiredUploads,
   fileMatchesStoredUpload,
   forgetUpload,
+  mergePendingUploads,
   pendingStoredUploads,
   readStoredUploads,
   rememberUpload,
   resumableUploadKey,
+  resumedProgress,
   type PendingResumableUpload,
+  type ServerPendingUpload,
 } from "@/lib/resumableUploads"
 import { getApiErrorMessage, getShareErrorMessage } from "@/lib/shareErrors"
+import { getUploadErrorMessage } from "@/lib/uploadErrors"
 
 function HeaderSearch() {
   const { openMenu } = useCommandMenu()
@@ -636,9 +641,15 @@ export function DriveShell() {
   const [loadingFiles, setLoadingFiles] = useState(true)
   const [uploadingName, setUploadingName] = useState<string | null>(null)
   const [uploadProgress, setUploadProgress] = useState(0)
+  const [uploadParts, setUploadParts] = useState<{
+    done: number
+    total: number
+  } | null>(null)
+  const [resumedFromPart, setResumedFromPart] = useState<number | null>(null)
   const [pendingUploads, setPendingUploads] = useState<
     PendingResumableUpload[]
   >([])
+  const [clearingExpired, setClearingExpired] = useState(false)
   const [resumeTarget, setResumeTarget] =
     useState<PendingResumableUpload | null>(null)
   const [downloadId, setDownloadId] = useState<string | null>(null)
@@ -687,9 +698,48 @@ export function DriveShell() {
 
   const copy = viewCopy[activeView]
 
+  // Fast, localStorage-only refresh used while an upload is in flight.
   const refreshPendingUploads = useCallback(() => {
     setPendingUploads(pendingStoredUploads())
   }, [])
+
+  // Authoritative refresh: the server owns which sessions still exist and when
+  // they expire; localStorage only supplies the local-file key. Falls back to
+  // localStorage when the server is unreachable.
+  const syncPendingUploads = useCallback(async () => {
+    if (!token) {
+      setPendingUploads([])
+      return
+    }
+    try {
+      const response = await api.listPendingUploads(token)
+      const serverUploads: ServerPendingUpload[] = response.uploads
+      setPendingUploads(mergePendingUploads(serverUploads))
+    } catch {
+      setPendingUploads(pendingStoredUploads())
+    }
+  }, [token])
+
+  const handleClearExpiredUploads = useCallback(async () => {
+    setClearingExpired(true)
+    try {
+      let activeFileIds: Set<string> | null = null
+      if (token) {
+        try {
+          const response = await api.listPendingUploads(token)
+          activeFileIds = new Set(
+            response.uploads.map((upload) => upload.file_id)
+          )
+        } catch {
+          activeFileIds = null
+        }
+      }
+      clearExpiredUploads(activeFileIds)
+      await syncPendingUploads()
+    } finally {
+      setClearingExpired(false)
+    }
+  }, [syncPendingUploads, token])
 
   const loadActiveView = useCallback(async () => {
     if (!token) {
@@ -731,11 +781,13 @@ export function DriveShell() {
   }, [loadActiveView])
 
   useEffect(() => {
-    const timer = window.setTimeout(refreshPendingUploads, 0)
+    const timer = window.setTimeout(() => {
+      void syncPendingUploads()
+    }, 0)
     return () => {
       window.clearTimeout(timer)
     }
-  }, [refreshPendingUploads])
+  }, [syncPendingUploads])
 
   if (!user) {
     return null // RequireAuth guarantees a user; this satisfies the type checker
@@ -768,6 +820,8 @@ export function DriveShell() {
     setActiveView("my-drive")
     setUploadingName(file.name)
     setUploadProgress(0)
+    setUploadParts(null)
+    setResumedFromPart(null)
 
     try {
       const parentFolderId =
@@ -831,13 +885,24 @@ export function DriveShell() {
         refreshPendingUploads()
       }
 
-      let uploadedBytes = Array.from(confirmedParts.values()).reduce(
-        (sum, size) => sum + size,
-        0
+      const confirmedList = Array.from(confirmedParts.entries()).map(
+        ([part_number, size_bytes]) => ({ part_number, size_bytes })
       )
-      setUploadProgress(Math.round((uploadedBytes / file.size) * 100))
+      const progress = resumedProgress(confirmedList, file.size, partSizeBytes)
+      let uploadedBytes = progress.bytesDone
+      const totalParts = progress.partsTotal
+      let partsDone = progress.partsDone
+      setUploadProgress(progress.percent)
+      setUploadParts({ done: partsDone, total: totalParts })
+      if (partsDone > 0) {
+        // The next part to actually send is the first one not yet confirmed.
+        let nextPart = 1
+        while (confirmedParts.has(nextPart)) {
+          nextPart += 1
+        }
+        setResumedFromPart(nextPart)
+      }
 
-      const totalParts = Math.ceil(file.size / partSizeBytes)
       for (let partNumber = 1; partNumber <= totalParts; partNumber += 1) {
         if (confirmedParts.has(partNumber)) {
           continue
@@ -846,31 +911,41 @@ export function DriveShell() {
         const end = Math.min(start + partSizeBytes, file.size)
         const blob = file.slice(start, end)
         const signed = await api.presignUploadPart(token, fileId, partNumber)
-        const etag = await uploadFilePart(signed.upload_url, blob, (loaded) => {
-          const current = uploadedBytes + loaded
-          setUploadProgress(Math.round((current / file.size) * 100))
-        })
+        const etag = await uploadFilePart(
+          signed.upload_url,
+          blob,
+          partNumber,
+          (loaded) => {
+            const current = uploadedBytes + loaded
+            setUploadProgress(Math.round((current / file.size) * 100))
+          }
+        )
         await api.recordUploadPart(token, fileId, partNumber, {
           size_bytes: blob.size,
           etag,
         })
         uploadedBytes += blob.size
+        partsDone += 1
         setUploadProgress(Math.round((uploadedBytes / file.size) * 100))
+        setUploadParts({ done: partsDone, total: totalParts })
       }
 
       await api.finalizeResumableUpload(token, fileId)
       forgetUpload(storageKey)
-      refreshPendingUploads()
       await refreshUser()
       const response = await api.browseDrive(token, currentFolderId)
       setFolders(response.folders)
       setFiles(response.files)
       setBreadcrumbs(response.breadcrumbs)
+      await syncPendingUploads()
     } catch (caught) {
-      setError(getApiErrorMessage(caught))
+      setError(getUploadErrorMessage(caught))
+      refreshPendingUploads()
     } finally {
       setUploadingName(null)
       setUploadProgress(0)
+      setUploadParts(null)
+      setResumedFromPart(null)
       if (inputRef.current) {
         inputRef.current.value = ""
       }
@@ -906,7 +981,7 @@ export function DriveShell() {
 
   function handleDismissPendingUpload(pending: PendingResumableUpload) {
     forgetUpload(pending.key)
-    refreshPendingUploads()
+    void syncPendingUploads()
   }
 
   async function handleDownload(fileId: string) {
@@ -1180,11 +1255,19 @@ export function DriveShell() {
                     <Badge variant="secondary">{uploadProgress}%</Badge>
                   </CardAction>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="flex flex-col gap-2">
                   <Progress
                     value={uploadProgress}
                     aria-label="Upload progress"
                   />
+                  {uploadParts && uploadParts.total > 0 && (
+                    <p className="text-sm text-muted-foreground">
+                      Part {Math.min(uploadParts.done + 1, uploadParts.total)} of{" "}
+                      {uploadParts.total}
+                      {resumedFromPart !== null &&
+                        ` — resumed from part ${resumedFromPart}`}
+                    </p>
+                  )}
                 </CardContent>
               </Card>
             )}
@@ -1198,6 +1281,17 @@ export function DriveShell() {
                       ? "1 upload can resume"
                       : `${pendingUploads.length} uploads can resume`}
                   </CardTitle>
+                  <CardAction>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={clearingExpired}
+                      onClick={() => void handleClearExpiredUploads()}
+                    >
+                      {clearingExpired ? "Clearing…" : "Clear expired"}
+                    </Button>
+                  </CardAction>
                 </CardHeader>
                 <CardContent className="flex flex-col gap-3">
                   <p className="text-sm text-muted-foreground">
@@ -1205,7 +1299,15 @@ export function DriveShell() {
                     already saved.
                   </p>
                   <div className="flex flex-col gap-2">
-                    {pendingUploads.map((pending) => (
+                    {pendingUploads.map((pending) => {
+                      const server = pending.server
+                      const partsTotal =
+                        server && server.part_size_bytes > 0
+                          ? Math.ceil(
+                              server.size_bytes / server.part_size_bytes
+                            )
+                          : null
+                      return (
                       <div
                         key={pending.key}
                         className="flex flex-col gap-3 rounded-lg border border-border p-3 sm:flex-row sm:items-center"
@@ -1217,6 +1319,12 @@ export function DriveShell() {
                           <div className="text-sm text-muted-foreground">
                             {formatBytes(pending.upload.size_bytes)} expires{" "}
                             {formatDate(pending.upload.expires_at)}
+                            {server && partsTotal !== null && (
+                              <>
+                                {" · "}
+                                {server.parts_received}/{partsTotal} parts saved
+                              </>
+                            )}
                           </div>
                         </div>
                         <div className="flex gap-2">
@@ -1236,7 +1344,8 @@ export function DriveShell() {
                           </Button>
                         </div>
                       </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 </CardContent>
               </Card>

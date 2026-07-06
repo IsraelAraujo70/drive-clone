@@ -782,6 +782,7 @@ describe("direct upload helper", () => {
     const upload = uploadFilePart(
       "https://storage.example/part",
       blob,
+      1,
       onProgress
     )
     const xhr = MockXMLHttpRequest.instances[0]
@@ -802,12 +803,51 @@ describe("direct upload helper", () => {
 
     const upload = uploadFilePart(
       "https://storage.example/part",
-      new Blob(["hello"])
+      new Blob(["hello"]),
+      1
     )
     const xhr = MockXMLHttpRequest.instances[0]
     xhr.status = 200
     xhr.emit("load")
 
     await expect(upload).rejects.toThrow("without an ETag")
+  })
+
+  it("throws an UploadPartError naming the part on an HTTP failure", async () => {
+    vi.stubGlobal("XMLHttpRequest", MockXMLHttpRequest)
+
+    const upload = uploadFilePart(
+      "https://storage.example/part",
+      new Blob(["hello"]),
+      4
+    )
+    const xhr = MockXMLHttpRequest.instances[0]
+    xhr.status = 500
+    xhr.emit("load")
+
+    await expect(upload).rejects.toMatchObject({
+      name: "UploadPartError",
+      partNumber: 4,
+      reason: "http",
+      status: 500,
+    })
+  })
+
+  it("throws an UploadPartError with a network reason on transport failure", async () => {
+    vi.stubGlobal("XMLHttpRequest", MockXMLHttpRequest)
+
+    const upload = uploadFilePart(
+      "https://storage.example/part",
+      new Blob(["hello"]),
+      2
+    )
+    const xhr = MockXMLHttpRequest.instances[0]
+    xhr.emit("error")
+
+    await expect(upload).rejects.toMatchObject({
+      name: "UploadPartError",
+      partNumber: 2,
+      reason: "network",
+    })
   })
 })

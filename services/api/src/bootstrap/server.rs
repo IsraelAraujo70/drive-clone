@@ -41,6 +41,7 @@ pub async fn run() {
         storage,
         config.max_file_size_bytes,
         config.presigned_url_ttl_seconds,
+        config.resumable_upload_ttl_seconds,
     );
 
     tracing::info!("drive-clone-api listening on {address}");

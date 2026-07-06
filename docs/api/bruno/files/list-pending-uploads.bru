@@ -1,10 +1,10 @@
 meta {
-  name: List Shared With Me
+  name: List Pending Uploads
   type: http
-  seq: 18
+  seq: 6
 }
 get {
-  url: {{baseUrl}}/files/shared-with-me
+  url: {{baseUrl}}/files/uploads/pending
   body: none
   auth: bearer
 }
@@ -23,5 +23,5 @@ tests {
 }
 
 docs {
-  Returns active complete files shared with the authenticated user. Each file includes owner identity.
+  Lists the caller's own pending, non-expired resumable sessions so the client can recover interrupted uploads. The server is authoritative for existence and expiration.
 }

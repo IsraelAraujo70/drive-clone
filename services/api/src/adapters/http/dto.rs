@@ -5,13 +5,14 @@ use uuid::Uuid;
 
 use crate::application::auth::signup::AuthResponse as UseCaseAuthResponse;
 use crate::application::files::{
-    CreateFolderInput, CreateUploadOutput, DownloadFileOutput, SearchFilesInput, ShareFileInput,
-    UpdateFileInput, UpdateFolderInput,
+    CreateFolderInput, CreateResumableUploadOutput, CreateUploadOutput, DownloadFileOutput,
+    ExpireUploadsOutput, PresignUploadPartInput, PresignUploadPartOutput, RecordUploadPartInput,
+    SearchFilesInput, ShareFileInput, UpdateFileInput, UpdateFolderInput,
 };
 use crate::domain::auth::User;
 use crate::domain::files::{
-    DriveBrowse, DriveFile, FileShare, FileUser, Folder, FolderPathEntry, SearchFileResult,
-    SharedFile, UploadRequest,
+    DriveBrowse, DriveFile, FileShare, FileUser, Folder, FolderPathEntry, ResumableUploadRequest,
+    ResumableUploadSession, SearchFileResult, SharedFile, UploadPart, UploadRequest,
 };
 
 #[derive(Deserialize)]
@@ -78,6 +79,171 @@ impl From<CreateUploadOutput> for CreateUploadResponse {
             upload_url: output.upload_url,
             object_key: output.object_key,
             expires_at: output.expires_at,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateResumableUploadRequest {
+    filename: String,
+    parent_folder_id: Option<Uuid>,
+    content_type: String,
+    size_bytes: i64,
+    checksum_sha256: Option<String>,
+    part_size_bytes: Option<i64>,
+}
+
+impl From<CreateResumableUploadRequest> for ResumableUploadRequest {
+    fn from(request: CreateResumableUploadRequest) -> Self {
+        Self {
+            filename: request.filename,
+            parent_folder_id: request.parent_folder_id,
+            content_type: request.content_type,
+            size_bytes: request.size_bytes,
+            checksum_sha256: request.checksum_sha256,
+            part_size_bytes: request.part_size_bytes,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreateResumableUploadResponse {
+    file_id: Uuid,
+    object_key: String,
+    part_size_bytes: i64,
+    expires_at: DateTime<Utc>,
+}
+
+impl From<CreateResumableUploadOutput> for CreateResumableUploadResponse {
+    fn from(output: CreateResumableUploadOutput) -> Self {
+        Self {
+            file_id: output.file_id,
+            object_key: output.object_key,
+            part_size_bytes: output.part_size_bytes,
+            expires_at: output.expires_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct UploadPartResponse {
+    part_number: i32,
+    size_bytes: i64,
+    etag: String,
+}
+
+impl From<UploadPart> for UploadPartResponse {
+    fn from(part: UploadPart) -> Self {
+        Self {
+            part_number: part.part_number,
+            size_bytes: part.size_bytes,
+            etag: part.etag,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct UploadStatusResponse {
+    file_id: Uuid,
+    filename: String,
+    parent_folder_id: Option<Uuid>,
+    content_type: String,
+    size_bytes: i64,
+    checksum_sha256: Option<String>,
+    object_key: String,
+    state: String,
+    part_size_bytes: i64,
+    expires_at: DateTime<Utc>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    completed_at: Option<DateTime<Utc>>,
+    parts: Vec<UploadPartResponse>,
+}
+
+impl From<ResumableUploadSession> for UploadStatusResponse {
+    fn from(session: ResumableUploadSession) -> Self {
+        Self {
+            file_id: session.file_id,
+            filename: session.filename,
+            parent_folder_id: session.parent_folder_id,
+            content_type: session.content_type,
+            size_bytes: session.size_bytes,
+            checksum_sha256: session.checksum_sha256,
+            object_key: session.object_key,
+            state: session.state.as_str().to_string(),
+            part_size_bytes: session.part_size_bytes,
+            expires_at: session.upload_expires_at,
+            created_at: session.created_at,
+            updated_at: session.updated_at,
+            completed_at: session.completed_at,
+            parts: session.parts.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PresignUploadPartRequest {
+    part_number: i32,
+}
+
+impl PresignUploadPartRequest {
+    pub fn into_input(self, file_id: Uuid) -> PresignUploadPartInput {
+        PresignUploadPartInput {
+            file_id,
+            part_number: self.part_number,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct PresignUploadPartResponse {
+    file_id: Uuid,
+    part_number: i32,
+    upload_url: String,
+    expires_at: DateTime<Utc>,
+    expected_size_bytes: i64,
+}
+
+impl From<PresignUploadPartOutput> for PresignUploadPartResponse {
+    fn from(output: PresignUploadPartOutput) -> Self {
+        Self {
+            file_id: output.file_id,
+            part_number: output.part_number,
+            upload_url: output.upload_url,
+            expires_at: output.expires_at,
+            expected_size_bytes: output.expected_size_bytes,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RecordUploadPartRequest {
+    size_bytes: i64,
+    etag: String,
+}
+
+impl RecordUploadPartRequest {
+    pub fn into_input(self, file_id: Uuid, part_number: i32) -> RecordUploadPartInput {
+        RecordUploadPartInput {
+            file_id,
+            part_number,
+            size_bytes: self.size_bytes,
+            etag: self.etag,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExpireUploadsResponse {
+    expired_count: usize,
+    aborted_count: usize,
+}
+
+impl From<ExpireUploadsOutput> for ExpireUploadsResponse {
+    fn from(output: ExpireUploadsOutput) -> Self {
+        Self {
+            expired_count: output.expired_count,
+            aborted_count: output.aborted_count,
         }
     }
 }

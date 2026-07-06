@@ -27,9 +27,9 @@ Folder organization uses the same `file_not_found` code for private or missing
 folders so callers cannot distinguish cross-user resources from absent ones.
 Invalid folder moves, including cycles, return `invalid_file_state`.
 
-Current upload scope: this contract supports direct single-object uploads through
-a presigned PUT URL. Multipart or resumable upload sessions are not part of the
-current API contract.
+Current upload scope: this contract supports both the original direct
+single-object upload and the resumable multipart upload flow. New clients should
+prefer resumable uploads.
 
 ## POST /files/uploads
 
@@ -68,6 +68,138 @@ Response `201`:
 The client uploads the full object directly to `upload_url` with HTTP `PUT`.
 After that, the client must complete the file through the API before it appears
 in drive listings.
+
+## Resumable uploads
+
+Resumable uploads use S3-compatible multipart upload state. The API owns
+metadata, part records, authorization, and final visibility. The browser uploads
+part bytes directly to object storage.
+
+### POST /files/uploads/resumable
+
+Request:
+
+```json
+{
+  "filename": "video.mov",
+  "parent_folder_id": null,
+  "content_type": "video/quicktime",
+  "size_bytes": 6291493,
+  "checksum_sha256": null,
+  "part_size_bytes": 6291456
+}
+```
+
+Rules:
+
+- Same filename, parent, content type, size, checksum, quota, and max-size rules
+  as `POST /files/uploads`.
+- `part_size_bytes` is optional. The server defaults to 8 MiB and raises too
+  small values when needed to satisfy the S3 multipart minimum part size and
+  stay within the S3 multipart limit of 10,000 parts.
+- The upload expires at `expires_at`; expired pending sessions cannot sign parts
+  or finalize.
+
+Response `201`:
+
+```json
+{
+  "file_id": "uuid",
+  "object_key": "owner/object",
+  "part_size_bytes": 8388608,
+  "expires_at": "2026-07-06T19:30:00Z"
+}
+```
+
+### GET /files/uploads/{file_id}/status
+
+Owner-only. Returns the resumable session and confirmed parts:
+
+```json
+{
+  "file_id": "uuid",
+  "filename": "video.mov",
+  "parent_folder_id": null,
+  "content_type": "video/quicktime",
+  "size_bytes": 6291493,
+  "checksum_sha256": null,
+  "object_key": "owner/object",
+  "state": "pending",
+  "part_size_bytes": 6291456,
+  "expires_at": "2026-07-06T19:30:00Z",
+  "created_at": "2026-07-06T19:15:00Z",
+  "updated_at": "2026-07-06T19:15:00Z",
+  "completed_at": null,
+  "parts": [
+    { "part_number": 1, "size_bytes": 6291456, "etag": "\"etag-1\"" }
+  ]
+}
+```
+
+### POST /files/uploads/{file_id}/parts
+
+Owner-only. Signs one missing part.
+
+Request:
+
+```json
+{ "part_number": 1 }
+```
+
+Response `200`:
+
+```json
+{
+  "file_id": "uuid",
+  "part_number": 1,
+  "upload_url": "https://...",
+  "expires_at": "2026-07-06T19:30:00Z",
+  "expected_size_bytes": 6291456
+}
+```
+
+The client uploads the exact byte range directly to `upload_url` with HTTP
+`PUT`. Object-storage CORS must expose the `ETag` response header.
+
+### POST /files/uploads/{file_id}/parts/{part_number}
+
+Owner-only. Records the uploaded part after direct object-storage PUT succeeds.
+
+Request:
+
+```json
+{ "size_bytes": 6291456, "etag": "\"etag-1\"" }
+```
+
+Rules:
+
+- `size_bytes` must equal the server's expected size for that part.
+- Recording the same part number again replaces the previous ETag and size.
+
+Response `200`:
+
+```json
+{ "part_number": 1, "size_bytes": 6291456, "etag": "\"etag-1\"" }
+```
+
+### POST /files/uploads/{file_id}/finalize
+
+Owner-only. Requires every expected part to be recorded in order and with the
+expected size. The API completes the multipart upload in object storage, HEADs
+the final object, marks the file `complete`, and increments storage usage once.
+
+Response `200`: `FileResponse`.
+
+### POST /files/uploads/cleanup-expired
+
+Authenticated. Expires up to 100 stale pending resumable uploads and aborts
+their multipart uploads in object storage.
+
+Response `200`:
+
+```json
+{ "expired_count": 2, "aborted_count": 2 }
+```
 
 ## POST /files/{file_id}/complete
 
@@ -405,8 +537,6 @@ Files shared with the authenticated user that are `complete` and not deleted, ne
 
 ## Future Contracts
 
-- Resumable uploads: upload sessions, object-storage parts, progress/status
-  lookup, finalization, expiration, and cleanup.
 - Share links: revocable tokenized links separate from the current registered
   user email grants.
 - Sync: cursor-based change feed with tombstones and deterministic conflict

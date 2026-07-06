@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { API_BASE_URL, ApiError, api, uploadFileDirect } from "./api"
+import {
+  API_BASE_URL,
+  ApiError,
+  api,
+  uploadFileDirect,
+  uploadFilePart,
+} from "./api"
 
 function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -16,7 +22,9 @@ describe("api client", () => {
   it("posts signup input as JSON", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValue(jsonResponse(201, { user: { email: "a@b.co" }, token: "tok" }))
+      .mockResolvedValue(
+        jsonResponse(201, { user: { email: "a@b.co" }, token: "tok" })
+      )
     vi.stubGlobal("fetch", fetchMock)
 
     const result = await api.signup({
@@ -38,7 +46,9 @@ describe("api client", () => {
   })
 
   it("sends the bearer token on authenticated calls", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { email: "a@b.co" }))
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(200, { email: "a@b.co" }))
     vi.stubGlobal("fetch", fetchMock)
 
     await api.me("secret-token")
@@ -51,14 +61,12 @@ describe("api client", () => {
   it("throws ApiError with the server error code and message", async () => {
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(
-          jsonResponse(401, {
-            error: "invalid_credentials",
-            message: "Invalid email or password",
-          }),
-        ),
+      vi.fn().mockResolvedValue(
+        jsonResponse(401, {
+          error: "invalid_credentials",
+          message: "Invalid email or password",
+        })
+      )
     )
 
     const error = await api
@@ -72,7 +80,10 @@ describe("api client", () => {
   })
 
   it("handles empty 204 responses", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 204 })))
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    )
     await expect(api.logout("secret-token")).resolves.toBeUndefined()
   })
 
@@ -83,7 +94,7 @@ describe("api client", () => {
         upload_url: "https://storage.example/upload",
         object_key: "objects/file-1",
         expires_at: "2026-07-02T12:00:00Z",
-      }),
+      })
     )
     vi.stubGlobal("fetch", fetchMock)
 
@@ -110,6 +121,100 @@ describe("api client", () => {
     })
   })
 
+  it("drives resumable upload session endpoints", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(201, {
+          file_id: "file-1",
+          object_key: "objects/file-1",
+          part_size_bytes: 8388608,
+          expires_at: "2026-07-02T12:00:00Z",
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          file_id: "file-1",
+          filename: "report.pdf",
+          parent_folder_id: null,
+          content_type: "application/pdf",
+          size_bytes: 42,
+          checksum_sha256: null,
+          object_key: "objects/file-1",
+          state: "pending",
+          part_size_bytes: 8388608,
+          expires_at: "2026-07-02T12:00:00Z",
+          created_at: "2026-07-02T11:00:00Z",
+          updated_at: "2026-07-02T11:00:00Z",
+          completed_at: null,
+          parts: [],
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          file_id: "file-1",
+          part_number: 1,
+          upload_url: "https://storage.example/part",
+          expires_at: "2026-07-02T12:00:00Z",
+          expected_size_bytes: 42,
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          part_number: 1,
+          size_bytes: 42,
+          etag: '"etag-1"',
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          id: "file-1",
+          filename: "report.pdf",
+          parent_folder_id: null,
+          content_type: "application/pdf",
+          size_bytes: 42,
+          checksum_sha256: null,
+          object_key: "objects/file-1",
+          state: "complete",
+          created_at: "2026-07-02T11:00:00Z",
+          updated_at: "2026-07-02T12:00:00Z",
+          completed_at: "2026-07-02T12:00:00Z",
+          deleted_at: null,
+        })
+      )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await api.createResumableUpload("secret-token", {
+      filename: "report.pdf",
+      parent_folder_id: null,
+      content_type: "application/pdf",
+      size_bytes: 42,
+      checksum_sha256: null,
+    })
+    await api.getUploadStatus("secret-token", "file-1")
+    await api.presignUploadPart("secret-token", "file-1", 1)
+    await api.recordUploadPart("secret-token", "file-1", 1, {
+      size_bytes: 42,
+      etag: '"etag-1"',
+    })
+    await api.finalizeResumableUpload("secret-token", "file-1")
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      `${API_BASE_URL}/files/uploads/resumable`,
+      `${API_BASE_URL}/files/uploads/file-1/status`,
+      `${API_BASE_URL}/files/uploads/file-1/parts`,
+      `${API_BASE_URL}/files/uploads/file-1/parts/1`,
+      `${API_BASE_URL}/files/uploads/file-1/finalize`,
+    ])
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({
+      part_number: 1,
+    })
+    expect(JSON.parse(fetchMock.mock.calls[3][1].body)).toEqual({
+      size_bytes: 42,
+      etag: '"etag-1"',
+    })
+  })
+
   it("creates folders and browses root or folder locations", async () => {
     const folder = {
       id: "folder-1",
@@ -129,7 +234,9 @@ describe("api client", () => {
       .fn()
       .mockResolvedValueOnce(jsonResponse(201, folder))
       .mockResolvedValueOnce(jsonResponse(200, browse))
-      .mockResolvedValueOnce(jsonResponse(200, { ...browse, parent_folder_id: null }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, { ...browse, parent_folder_id: null })
+      )
       .mockResolvedValueOnce(jsonResponse(200, { folders: [folder] }))
     vi.stubGlobal("fetch", fetchMock)
 
@@ -137,10 +244,10 @@ describe("api client", () => {
       api.createFolder("secret-token", {
         name: "Projects",
         parent_folder_id: null,
-      }),
+      })
     ).resolves.toEqual(folder)
     await expect(api.browseDrive("secret-token", "folder-1")).resolves.toEqual(
-      browse,
+      browse
     )
     await expect(api.browseDrive("secret-token", null)).resolves.toEqual({
       ...browse,
@@ -187,7 +294,9 @@ describe("api client", () => {
     }
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse(200, { ...file, filename: "renamed.pdf" }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, { ...file, filename: "renamed.pdf" })
+      )
       .mockResolvedValueOnce(jsonResponse(200, { ...folder, name: "Work" }))
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce(jsonResponse(200, folder))
@@ -197,7 +306,7 @@ describe("api client", () => {
           breadcrumbs: [],
           folders: [folder],
           files: [],
-        }),
+        })
       )
     vi.stubGlobal("fetch", fetchMock)
 
@@ -205,18 +314,20 @@ describe("api client", () => {
       api.updateFile("secret-token", "file-1", {
         filename: "renamed.pdf",
         parent_folder_id: null,
-      }),
+      })
     ).resolves.toMatchObject({ filename: "renamed.pdf" })
     await expect(
       api.updateFolder("secret-token", "folder-1", {
         name: "Work",
         parent_folder_id: null,
-      }),
+      })
     ).resolves.toMatchObject({ name: "Work" })
-    await expect(api.deleteFolder("secret-token", "folder-1")).resolves.toBeUndefined()
-    await expect(api.restoreFolder("secret-token", "folder-1")).resolves.toEqual(
-      folder,
-    )
+    await expect(
+      api.deleteFolder("secret-token", "folder-1")
+    ).resolves.toBeUndefined()
+    await expect(
+      api.restoreFolder("secret-token", "folder-1")
+    ).resolves.toEqual(folder)
     await expect(api.listDriveTrash("secret-token")).resolves.toEqual({
       parent_folder_id: null,
       breadcrumbs: [],
@@ -262,20 +373,22 @@ describe("api client", () => {
         jsonResponse(200, {
           download_url: "https://storage.example/download",
           expires_at: "2026-07-02T13:00:00Z",
-        }),
+        })
       )
     vi.stubGlobal("fetch", fetchMock)
 
     await expect(api.completeUpload("secret-token", "file-1")).resolves.toEqual(
-      completedFile,
+      completedFile
     )
     await expect(api.listFiles("secret-token")).resolves.toEqual({
       files: [completedFile],
     })
-    await expect(api.createDownload("secret-token", "file-1")).resolves.toEqual({
-      download_url: "https://storage.example/download",
-      expires_at: "2026-07-02T13:00:00Z",
-    })
+    await expect(api.createDownload("secret-token", "file-1")).resolves.toEqual(
+      {
+        download_url: "https://storage.example/download",
+        expires_at: "2026-07-02T13:00:00Z",
+      }
+    )
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       `${API_BASE_URL}/files/file-1/complete`,
@@ -284,7 +397,7 @@ describe("api client", () => {
     ])
     expect(fetchMock.mock.calls[0][1].method).toBe("POST")
     expect(fetchMock.mock.calls[1][1].headers.Authorization).toBe(
-      "Bearer secret-token",
+      "Bearer secret-token"
     )
   })
 
@@ -311,9 +424,11 @@ describe("api client", () => {
       .mockResolvedValueOnce(jsonResponse(200, { files: [trashFile] }))
     vi.stubGlobal("fetch", fetchMock)
 
-    await expect(api.deleteFile("secret-token", "file-1")).resolves.toBeUndefined()
+    await expect(
+      api.deleteFile("secret-token", "file-1")
+    ).resolves.toBeUndefined()
     await expect(api.restoreFile("secret-token", "file-1")).resolves.toEqual(
-      restoredFile,
+      restoredFile
     )
     await expect(api.listTrash("secret-token")).resolves.toEqual({
       files: [trashFile],
@@ -327,7 +442,7 @@ describe("api client", () => {
     expect(fetchMock.mock.calls[0][1].method).toBe("DELETE")
     expect(fetchMock.mock.calls[1][1].method).toBe("POST")
     expect(fetchMock.mock.calls[2][1].headers.Authorization).toBe(
-      "Bearer secret-token",
+      "Bearer secret-token"
     )
   })
 
@@ -349,13 +464,13 @@ describe("api client", () => {
     vi.stubGlobal("fetch", fetchMock)
 
     await expect(
-      api.shareFile("secret-token", "file-1", "friend@example.com"),
+      api.shareFile("secret-token", "file-1", "friend@example.com")
     ).resolves.toEqual(share)
     await expect(api.listShares("secret-token", "file-1")).resolves.toEqual({
       shares: [share],
     })
     await expect(
-      api.revokeShare("secret-token", "file-1", "user-2"),
+      api.revokeShare("secret-token", "file-1", "user-2")
     ).resolves.toBeUndefined()
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
@@ -365,7 +480,7 @@ describe("api client", () => {
     ])
     expect(fetchMock.mock.calls[0][1].method).toBe("POST")
     expect(fetchMock.mock.calls[0][1].headers["Content-Type"]).toBe(
-      "application/json",
+      "application/json"
     )
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
       email: "friend@example.com",
@@ -427,7 +542,7 @@ describe("api client", () => {
       jsonResponse(200, {
         query: "report pdf",
         files: [{ access: "owned", file, owner: null }],
-      }),
+      })
     )
     vi.stubGlobal("fetch", fetchMock)
 
@@ -435,7 +550,7 @@ describe("api client", () => {
       api.searchFiles("secret-token", " report pdf ", {
         include_deleted: true,
         limit: 10,
-      }),
+      })
     ).resolves.toEqual({
       query: "report pdf",
       files: [{ access: "owned", file, owner: null }],
@@ -443,7 +558,7 @@ describe("api client", () => {
 
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toBe(
-      `${API_BASE_URL}/search?q=report%20pdf&include_deleted=true&limit=10`,
+      `${API_BASE_URL}/search?q=report%20pdf&include_deleted=true&limit=10`
     )
     expect(init.headers.Authorization).toBe("Bearer secret-token")
   })
@@ -466,8 +581,8 @@ describe("api client", () => {
         jsonResponse(422, {
           error: "validation_error",
           message: "Enter a search query",
-        }),
-      ),
+        })
+      )
     )
 
     const error = await api
@@ -487,8 +602,8 @@ describe("api client", () => {
         jsonResponse(404, {
           error: "user_not_found",
           message: "No user exists for that email.",
-        }),
-      ),
+        })
+      )
     )
 
     const error = await api
@@ -502,7 +617,10 @@ describe("api client", () => {
   })
 
   it("falls back to a generic error on non-JSON failures", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("boom", { status: 500 })))
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("boom", { status: 500 }))
+    )
 
     const error = await api.health().catch((caught: unknown) => caught)
     expect(error).toBeInstanceOf(ApiError)
@@ -524,12 +642,19 @@ class MockXMLHttpRequest {
   url = ""
   body: BodyInit | null = null
   headers: Record<string, string> = {}
+  responseHeaders: Record<string, string> = {}
   uploadListeners: Record<string, ((event: MockXhrEvent) => void)[]> = {}
   listeners: Record<string, (() => void)[]> = {}
 
   upload = {
-    addEventListener: (type: string, listener: (event: MockXhrEvent) => void) => {
-      this.uploadListeners[type] = [...(this.uploadListeners[type] ?? []), listener]
+    addEventListener: (
+      type: string,
+      listener: (event: MockXhrEvent) => void
+    ) => {
+      this.uploadListeners[type] = [
+        ...(this.uploadListeners[type] ?? []),
+        listener,
+      ]
     },
   }
 
@@ -544,6 +669,10 @@ class MockXMLHttpRequest {
 
   setRequestHeader(name: string, value: string) {
     this.headers[name] = value
+  }
+
+  getResponseHeader(name: string) {
+    return this.responseHeaders[name] ?? null
   }
 
   send(body: BodyInit) {
@@ -580,7 +709,7 @@ describe("direct upload helper", () => {
     const upload = uploadFileDirect(
       "https://storage.example/upload",
       file,
-      onProgress,
+      onProgress
     )
 
     const xhr = MockXMLHttpRequest.instances[0]
@@ -594,7 +723,11 @@ describe("direct upload helper", () => {
     xhr.emit("load")
 
     await expect(upload).resolves.toBeUndefined()
-    expect(onProgress).toHaveBeenCalledWith({ loaded: 3, total: 5, percent: 60 })
+    expect(onProgress).toHaveBeenCalledWith({
+      loaded: 3,
+      total: 5,
+      percent: 60,
+    })
   })
 
   it("uses application/octet-stream when the file has no type", async () => {
@@ -630,7 +763,7 @@ describe("direct upload helper", () => {
     const upload = uploadFileDirect(
       "https://storage.example/upload",
       file,
-      onProgress,
+      onProgress
     )
     const xhr = MockXMLHttpRequest.instances[0]
     xhr.emitUploadProgress({ lengthComputable: false, loaded: 3, total: 5 })
@@ -639,5 +772,42 @@ describe("direct upload helper", () => {
 
     await expect(upload).resolves.toBeUndefined()
     expect(onProgress).not.toHaveBeenCalled()
+  })
+
+  it("uploads a part and returns the ETag response header", async () => {
+    vi.stubGlobal("XMLHttpRequest", MockXMLHttpRequest)
+    const blob = new Blob(["hello"])
+    const onProgress = vi.fn()
+
+    const upload = uploadFilePart(
+      "https://storage.example/part",
+      blob,
+      onProgress
+    )
+    const xhr = MockXMLHttpRequest.instances[0]
+    expect(xhr.method).toBe("PUT")
+    expect(xhr.body).toBe(blob)
+
+    xhr.emitUploadProgress({ lengthComputable: true, loaded: 2, total: 5 })
+    xhr.responseHeaders.ETag = '"etag-1"'
+    xhr.status = 200
+    xhr.emit("load")
+
+    await expect(upload).resolves.toBe('"etag-1"')
+    expect(onProgress).toHaveBeenCalledWith(2, 5)
+  })
+
+  it("rejects a completed part upload without ETag", async () => {
+    vi.stubGlobal("XMLHttpRequest", MockXMLHttpRequest)
+
+    const upload = uploadFilePart(
+      "https://storage.example/part",
+      new Blob(["hello"])
+    )
+    const xhr = MockXMLHttpRequest.instances[0]
+    xhr.status = 200
+    xhr.emit("load")
+
+    await expect(upload).rejects.toThrow("without an ETag")
   })
 })

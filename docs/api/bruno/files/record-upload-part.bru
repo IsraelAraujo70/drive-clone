@@ -1,0 +1,35 @@
+meta {
+  name: Record Upload Part
+  type: http
+  seq: 8
+}
+post {
+  url: {{baseUrl}}/files/uploads/{{fileId}}/parts/{{partNumber}}
+  body: json
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "size_bytes": "{{partSizeBytes}}",
+    "etag": "\"replace-with-object-storage-etag\""
+  }
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([200, 401, 404, 409, 422]).to.include(res.status);
+  });
+}
+
+docs {
+  Records one uploaded multipart part. The ETag must come from object storage after PUT; recording the same part replaces prior metadata.
+}

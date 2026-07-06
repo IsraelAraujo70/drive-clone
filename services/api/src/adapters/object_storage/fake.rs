@@ -6,11 +6,16 @@ use chrono::{Duration, Utc};
 use url::Url;
 
 use crate::application::ports::StorageError;
-use crate::application::ports::object_storage::{ObjectMetadata, ObjectStorage, PresignedUrl};
+use crate::application::ports::object_storage::{
+    CompletedUploadPart, ObjectMetadata, ObjectStorage, PresignedUrl,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct FakeObjectStorage {
     objects: Arc<Mutex<HashMap<String, ObjectMetadata>>>,
+    multipart_uploads: Arc<Mutex<HashMap<String, String>>>,
+    completed_multipart: Arc<Mutex<Vec<(String, String, Vec<CompletedUploadPart>)>>>,
+    aborted_multipart: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 impl FakeObjectStorage {
@@ -19,6 +24,13 @@ impl FakeObjectStorage {
             .lock()
             .expect("fake storage mutex poisoned")
             .insert(object_key.to_string(), ObjectMetadata { content_length });
+    }
+
+    pub fn multipart_completions(&self) -> Vec<(String, String, Vec<CompletedUploadPart>)> {
+        self.completed_multipart
+            .lock()
+            .expect("fake storage mutex poisoned")
+            .clone()
     }
 }
 
@@ -49,6 +61,64 @@ impl ObjectStorage for FakeObjectStorage {
             .get(object_key)
             .cloned()
             .ok_or(StorageError::Unexpected)
+    }
+
+    async fn create_multipart_upload(
+        &self,
+        object_key: &str,
+        _content_type: &str,
+    ) -> Result<String, StorageError> {
+        let upload_id = format!("fake-upload-{object_key}");
+        self.multipart_uploads
+            .lock()
+            .expect("fake storage mutex poisoned")
+            .insert(object_key.to_string(), upload_id.clone());
+        Ok(upload_id)
+    }
+
+    async fn presign_upload_part(
+        &self,
+        object_key: &str,
+        upload_id: &str,
+        part_number: i32,
+        ttl_seconds: i64,
+    ) -> Result<PresignedUrl, StorageError> {
+        let mut presigned = presigned_fake_url("PUT", object_key, ttl_seconds)?;
+        let mut url = Url::parse(&presigned.url).map_err(|_| StorageError::Unexpected)?;
+        url.query_pairs_mut()
+            .append_pair("uploadId", upload_id)
+            .append_pair("partNumber", &part_number.to_string());
+        presigned.url = url.to_string();
+        Ok(presigned)
+    }
+
+    async fn complete_multipart_upload(
+        &self,
+        object_key: &str,
+        upload_id: &str,
+        parts: &[CompletedUploadPart],
+    ) -> Result<(), StorageError> {
+        self.completed_multipart
+            .lock()
+            .expect("fake storage mutex poisoned")
+            .push((
+                object_key.to_string(),
+                upload_id.to_string(),
+                parts.to_vec(),
+            ));
+        Ok(())
+    }
+
+    async fn abort_multipart_upload(
+        &self,
+        object_key: &str,
+        upload_id: &str,
+    ) -> Result<(), StorageError> {
+        self.aborted_multipart
+            .lock()
+            .expect("fake storage mutex poisoned")
+            .push((object_key.to_string(), upload_id.to_string()));
+        Ok(())
     }
 }
 

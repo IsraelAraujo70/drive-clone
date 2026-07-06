@@ -5,11 +5,13 @@ use sqlx::PgPool;
 use crate::adapters::postgres::{PostgresAuthRepository, PostgresFileRepository};
 use crate::application::auth::{GetCurrentUserUseCase, LoginUseCase, LogoutUseCase, SignupUseCase};
 use crate::application::files::{
-    BrowseFolderUseCase, CompleteUploadUseCase, CreateFolderUseCase, CreateUploadUseCase,
-    DeleteFileUseCase, DeleteFolderUseCase, DownloadFileUseCase, ListDriveTrashUseCase,
-    ListFilesUseCase, ListFoldersUseCase, ListSharedWithMeUseCase, ListSharesUseCase,
-    ListTrashUseCase, RestoreFileUseCase, RestoreFolderUseCase, RevokeShareUseCase,
-    SearchFilesUseCase, ShareFileUseCase, UpdateFileUseCase, UpdateFolderUseCase,
+    BrowseFolderUseCase, CompleteUploadUseCase, CreateFolderUseCase, CreateResumableUploadUseCase,
+    CreateUploadUseCase, DeleteFileUseCase, DeleteFolderUseCase, DownloadFileUseCase,
+    ExpireResumableUploadsUseCase, FinalizeResumableUploadUseCase, GetUploadStatusUseCase,
+    ListDriveTrashUseCase, ListFilesUseCase, ListFoldersUseCase, ListSharedWithMeUseCase,
+    ListSharesUseCase, ListTrashUseCase, PresignUploadPartUseCase, RecordUploadPartUseCase,
+    RestoreFileUseCase, RestoreFolderUseCase, RevokeShareUseCase, SearchFilesUseCase,
+    ShareFileUseCase, UpdateFileUseCase, UpdateFolderUseCase,
 };
 use crate::application::ports::auth::AuthRepository;
 use crate::application::ports::clock::{Clock, SystemClock};
@@ -25,6 +27,12 @@ pub struct AppState {
     pub logout: LogoutUseCase,
     pub get_current_user: GetCurrentUserUseCase,
     pub create_upload: CreateUploadUseCase,
+    pub create_resumable_upload: CreateResumableUploadUseCase,
+    pub get_upload_status: GetUploadStatusUseCase,
+    pub presign_upload_part: PresignUploadPartUseCase,
+    pub record_upload_part: RecordUploadPartUseCase,
+    pub finalize_resumable_upload: FinalizeResumableUploadUseCase,
+    pub expire_resumable_uploads: ExpireResumableUploadsUseCase,
     pub complete_upload: CompleteUploadUseCase,
     pub create_folder: CreateFolderUseCase,
     pub browse_folder: BrowseFolderUseCase,
@@ -65,13 +73,42 @@ impl AppState {
             signup: SignupUseCase::new(auth_repository.clone(), clock.clone()),
             login: LoginUseCase::new(auth_repository.clone(), clock.clone()),
             logout: LogoutUseCase::new(auth_repository.clone()),
-            get_current_user: GetCurrentUserUseCase::new(auth_repository.clone(), clock),
+            get_current_user: GetCurrentUserUseCase::new(auth_repository.clone(), clock.clone()),
             create_upload: CreateUploadUseCase::new(
                 file_repository.clone(),
                 storage.clone(),
-                id_generator,
+                id_generator.clone(),
                 max_file_size_bytes,
                 presigned_url_ttl_seconds,
+            ),
+            create_resumable_upload: CreateResumableUploadUseCase::new(
+                file_repository.clone(),
+                storage.clone(),
+                id_generator,
+                clock.clone(),
+                max_file_size_bytes,
+                presigned_url_ttl_seconds,
+            ),
+            get_upload_status: GetUploadStatusUseCase::new(file_repository.clone()),
+            presign_upload_part: PresignUploadPartUseCase::new(
+                file_repository.clone(),
+                storage.clone(),
+                clock.clone(),
+                presigned_url_ttl_seconds,
+            ),
+            record_upload_part: RecordUploadPartUseCase::new(
+                file_repository.clone(),
+                clock.clone(),
+            ),
+            finalize_resumable_upload: FinalizeResumableUploadUseCase::new(
+                file_repository.clone(),
+                storage.clone(),
+                clock.clone(),
+            ),
+            expire_resumable_uploads: ExpireResumableUploadsUseCase::new(
+                file_repository.clone(),
+                storage.clone(),
+                clock.clone(),
             ),
             complete_upload: CompleteUploadUseCase::new(file_repository.clone(), storage.clone()),
             create_folder: CreateFolderUseCase::new(file_repository.clone()),

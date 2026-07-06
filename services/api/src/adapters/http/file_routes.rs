@@ -6,11 +6,13 @@ use uuid::Uuid;
 
 use crate::adapters::http::auth_extractor::AuthenticatedUser;
 use crate::adapters::http::dto::{
-    BrowseDriveQuery, CreateFolderRequest, CreateUploadRequest, CreateUploadResponse,
-    DownloadResponse, DriveBrowseResponse, FileResponse, FileShareResponse, FolderResponse,
+    BrowseDriveQuery, CreateFolderRequest, CreateResumableUploadRequest,
+    CreateResumableUploadResponse, CreateUploadRequest, CreateUploadResponse, DownloadResponse,
+    DriveBrowseResponse, ExpireUploadsResponse, FileResponse, FileShareResponse, FolderResponse,
     ListFilesResponse, ListFoldersResponse, ListSharedWithMeResponse, ListSharesResponse,
-    SearchFilesQuery, SearchFilesResponse, ShareFileRequest, UpdateFileRequest,
-    UpdateFolderRequest,
+    PresignUploadPartRequest, PresignUploadPartResponse, RecordUploadPartRequest, SearchFilesQuery,
+    SearchFilesResponse, ShareFileRequest, UpdateFileRequest, UpdateFolderRequest,
+    UploadPartResponse, UploadStatusResponse,
 };
 use crate::adapters::http::error::HttpError;
 use crate::bootstrap::state::AppState;
@@ -28,6 +30,77 @@ pub async fn create_upload(
         StatusCode::CREATED,
         Json(CreateUploadResponse::from(output)),
     ))
+}
+
+pub async fn create_resumable_upload(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Json(request): Json<CreateResumableUploadRequest>,
+) -> Result<impl IntoResponse, HttpError> {
+    let output = state
+        .create_resumable_upload
+        .execute(&auth.user, request.into())
+        .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateResumableUploadResponse::from(output)),
+    ))
+}
+
+pub async fn get_upload_status(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(file_id): Path<Uuid>,
+) -> Result<Json<UploadStatusResponse>, HttpError> {
+    let session = state.get_upload_status.execute(&auth.user, file_id).await?;
+    Ok(Json(UploadStatusResponse::from(session)))
+}
+
+pub async fn presign_upload_part(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(file_id): Path<Uuid>,
+    Json(request): Json<PresignUploadPartRequest>,
+) -> Result<Json<PresignUploadPartResponse>, HttpError> {
+    let output = state
+        .presign_upload_part
+        .execute(&auth.user, request.into_input(file_id))
+        .await?;
+    Ok(Json(PresignUploadPartResponse::from(output)))
+}
+
+pub async fn record_upload_part(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path((file_id, part_number)): Path<(Uuid, i32)>,
+    Json(request): Json<RecordUploadPartRequest>,
+) -> Result<Json<UploadPartResponse>, HttpError> {
+    let part = state
+        .record_upload_part
+        .execute(&auth.user, request.into_input(file_id, part_number))
+        .await?;
+    Ok(Json(UploadPartResponse::from(part)))
+}
+
+pub async fn finalize_resumable_upload(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(file_id): Path<Uuid>,
+) -> Result<Json<FileResponse>, HttpError> {
+    let file = state
+        .finalize_resumable_upload
+        .execute(&auth.user, file_id)
+        .await?;
+    Ok(Json(FileResponse::from(file)))
+}
+
+pub async fn expire_resumable_uploads(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+) -> Result<Json<ExpireUploadsResponse>, HttpError> {
+    let _ = auth;
+    let output = state.expire_resumable_uploads.execute(100).await?;
+    Ok(Json(ExpireUploadsResponse::from(output)))
 }
 
 pub async fn create_folder(

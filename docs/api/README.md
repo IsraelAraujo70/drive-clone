@@ -383,13 +383,14 @@ Responses:
 
 ## Files
 
-Current upload scope: the API supports direct single-object uploads through a
-short-lived presigned PUT URL. Multipart/resumable upload sessions, progress
-status, and upload cleanup are future API work.
+Current upload scope: new clients should use resumable multipart uploads. The
+original direct single-object upload endpoint remains supported for compatibility
+and simple smoke tests.
 
 ### `POST /files/uploads`
 
-Authenticated. Creates pending file metadata and returns a presigned PUT URL.
+Authenticated. Compatibility direct upload path. Creates pending file metadata
+and returns a presigned PUT URL for one full-object upload.
 
 Request:
 
@@ -445,6 +446,134 @@ Responses:
 - `404 file_not_found`
 - `409 invalid_file_state`
 - `502 storage_error`
+
+### `POST /files/uploads/resumable`
+
+Authenticated. Creates a pending resumable multipart upload session and starts
+the backing object-storage multipart upload.
+
+Request:
+
+```json
+{
+  "filename": "video.mov",
+  "parent_folder_id": null,
+  "content_type": "video/quicktime",
+  "size_bytes": 6291493,
+  "checksum_sha256": null,
+  "part_size_bytes": 6291456
+}
+```
+
+Rules:
+
+- Same validation, parent-folder ownership, max-size, and quota rules as direct
+  upload creation.
+- `part_size_bytes` is optional. Default is 8 MiB. The server raises too-small
+  values to satisfy S3-compatible multipart limits.
+- Sessions expire at `expires_at`.
+
+Response `201`:
+
+```json
+{
+  "file_id": "uuid",
+  "object_key": "owner/object",
+  "part_size_bytes": 8388608,
+  "expires_at": "2026-07-06T19:30:00Z"
+}
+```
+
+### `GET /files/uploads/{file_id}/status`
+
+Authenticated owner-only. Returns confirmed resumable upload progress.
+
+Response `200`:
+
+```json
+{
+  "file_id": "uuid",
+  "filename": "video.mov",
+  "parent_folder_id": null,
+  "content_type": "video/quicktime",
+  "size_bytes": 6291493,
+  "checksum_sha256": null,
+  "object_key": "owner/object",
+  "state": "pending",
+  "part_size_bytes": 6291456,
+  "expires_at": "2026-07-06T19:30:00Z",
+  "created_at": "2026-07-06T19:15:00Z",
+  "updated_at": "2026-07-06T19:15:00Z",
+  "completed_at": null,
+  "parts": [
+    { "part_number": 1, "size_bytes": 6291456, "etag": "\"etag-1\"" }
+  ]
+}
+```
+
+### `POST /files/uploads/{file_id}/parts`
+
+Authenticated owner-only. Signs a direct object-storage PUT URL for one part.
+
+Request:
+
+```json
+{ "part_number": 1 }
+```
+
+Response `200`:
+
+```json
+{
+  "file_id": "uuid",
+  "part_number": 1,
+  "upload_url": "https://...",
+  "expires_at": "2026-07-06T19:30:00Z",
+  "expected_size_bytes": 6291456
+}
+```
+
+The client uploads exactly `expected_size_bytes` bytes to `upload_url` and reads
+the object-storage `ETag` response header.
+
+### `POST /files/uploads/{file_id}/parts/{part_number}`
+
+Authenticated owner-only. Records a successfully uploaded part.
+
+Request:
+
+```json
+{ "size_bytes": 6291456, "etag": "\"etag-1\"" }
+```
+
+Response `200`:
+
+```json
+{ "part_number": 1, "size_bytes": 6291456, "etag": "\"etag-1\"" }
+```
+
+### `POST /files/uploads/{file_id}/finalize`
+
+Authenticated owner-only. Completes the object-storage multipart upload, verifies
+the final object size, marks the file complete, and increments storage usage
+once.
+
+Responses:
+
+- `200`: `File`
+- `404 file_not_found`
+- `409 invalid_file_state`
+- `502 storage_error`
+
+### `POST /files/uploads/cleanup-expired`
+
+Authenticated. Expires and aborts up to 100 stale pending resumable uploads.
+
+Response `200`:
+
+```json
+{ "expired_count": 2, "aborted_count": 2 }
+```
 
 ### `GET /files`
 
@@ -588,8 +717,6 @@ Responses:
 
 ## Future API Contracts
 
-- Resumable uploads: create an upload session, upload parts, query progress,
-  finalize the object, expire abandoned sessions, and clean up orphaned parts.
 - Share links: revocable tokenized links separate from registered-user email
   grants.
 - Sync: cursor-based `/sync/changes` contract with tombstones and deterministic

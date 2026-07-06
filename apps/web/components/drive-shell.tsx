@@ -76,11 +76,15 @@ import { Input } from "@/components/ui/input"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { Progress } from "@/components/ui/progress"
 import { Separator } from "@/components/ui/separator"
-import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
+import {
+  SidebarInset,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@/components/ui/sidebar"
 import { Spinner } from "@/components/ui/spinner"
 import {
   api,
-  uploadFileDirect,
+  uploadFilePart,
   type FileRecord,
   type FolderPathEntry,
   type FolderRecord,
@@ -91,10 +95,58 @@ import {
 import { useAuth } from "@/lib/auth"
 import { formatBytes } from "@/lib/format"
 import { useModifierSymbol } from "@/lib/platform"
-import {
-  getApiErrorMessage,
-  getShareErrorMessage,
-} from "@/lib/shareErrors"
+import { getApiErrorMessage, getShareErrorMessage } from "@/lib/shareErrors"
+
+const RESUMABLE_UPLOADS_KEY = "drive_clone_resumable_uploads_v1"
+
+type StoredResumableUpload = {
+  file_id: string
+  filename: string
+  size_bytes: number
+  last_modified: number
+  content_type: string
+  parent_folder_id: string | null
+  expires_at: string
+}
+
+function resumableUploadKey(file: File, parentFolderId: string | null) {
+  return [
+    file.name,
+    file.size,
+    file.lastModified,
+    file.type || "application/octet-stream",
+    parentFolderId ?? "root",
+  ].join(":")
+}
+
+function readStoredUploads(): Record<string, StoredResumableUpload> {
+  if (typeof window === "undefined") {
+    return {}
+  }
+  try {
+    return JSON.parse(
+      window.localStorage.getItem(RESUMABLE_UPLOADS_KEY) ?? "{}"
+    )
+  } catch {
+    return {}
+  }
+}
+
+function writeStoredUploads(uploads: Record<string, StoredResumableUpload>) {
+  window.localStorage.setItem(RESUMABLE_UPLOADS_KEY, JSON.stringify(uploads))
+}
+
+function rememberUpload(key: string, upload: StoredResumableUpload) {
+  const uploads = readStoredUploads()
+  uploads[key] = upload
+  writeStoredUploads(uploads)
+}
+
+function forgetUpload(key: string) {
+  const uploads = readStoredUploads()
+  delete uploads[key]
+  writeStoredUploads(uploads)
+}
 
 function HeaderSearch() {
   const { openMenu } = useCommandMenu()
@@ -104,7 +156,7 @@ function HeaderSearch() {
     <button
       type="button"
       onClick={openMenu}
-      className="text-muted-foreground border-input bg-background hover:bg-accent/40 flex w-full max-w-md items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors"
+      className="flex w-full max-w-md items-center gap-2 rounded-lg border border-input bg-background px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent/40"
     >
       <Search aria-hidden="true" className="size-4" />
       <span className="flex-1 text-left">Search files</span>
@@ -118,7 +170,7 @@ function HeaderSearch() {
 
 function DriveHeader({ user, onLogout }: { user: User; onLogout: () => void }) {
   return (
-    <header className="border-border bg-card/80 sticky top-0 z-10 flex items-center gap-3 border-b px-4 py-3 backdrop-blur">
+    <header className="sticky top-0 z-10 flex items-center gap-3 border-b border-border bg-card/80 px-4 py-3 backdrop-blur">
       <SidebarTrigger aria-label="Toggle sidebar (⌘B)" />
       <Separator orientation="vertical" className="mr-1 !h-6" />
       <HeaderSearch />
@@ -184,7 +236,9 @@ function formatDate(value: string | null): string {
   return dateFormatter.format(new Date(value))
 }
 
-function isSharedFile(file: FileRecord | SharedFileRecord): file is SharedFileRecord {
+function isSharedFile(
+  file: FileRecord | SharedFileRecord
+): file is SharedFileRecord {
   return "owner" in file
 }
 
@@ -250,7 +304,9 @@ function ShareDialog({
   async function handleShare(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!token || !file) {
-      setError("unauthorized: Your session expired. Log in again to share files.")
+      setError(
+        "unauthorized: Your session expired. Log in again to share files."
+      )
       return
     }
 
@@ -270,7 +326,9 @@ function ShareDialog({
 
   async function handleRevoke(granteeId: string) {
     if (!token || !file) {
-      setError("unauthorized: Your session expired. Log in again to revoke access.")
+      setError(
+        "unauthorized: Your session expired. Log in again to revoke access."
+      )
       return
     }
 
@@ -299,7 +357,9 @@ function ShareDialog({
         <form onSubmit={handleShare}>
           <FieldGroup>
             <Field data-invalid={Boolean(error)}>
-              <FieldLabel htmlFor="share-email">Grant access by email</FieldLabel>
+              <FieldLabel htmlFor="share-email">
+                Grant access by email
+              </FieldLabel>
               <div className="flex gap-2">
                 <Input
                   id="share-email"
@@ -324,25 +384,25 @@ function ShareDialog({
         <div className="flex flex-col gap-2">
           <div className="text-sm font-medium">Current grantees</div>
           {loading ? (
-            <div className="text-muted-foreground flex items-center gap-2 text-sm">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Spinner />
               Loading shares…
             </div>
           ) : shares.length === 0 ? (
-            <p className="text-muted-foreground text-sm">
+            <p className="text-sm text-muted-foreground">
               This file is not shared with anyone.
             </p>
           ) : (
             shares.map((share) => (
               <div
                 key={share.grantee.id}
-                className="border-border flex items-center gap-3 rounded-lg border p-3"
+                className="flex items-center gap-3 rounded-lg border border-border p-3"
               >
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-medium">
                     {share.grantee.display_name}
                   </div>
-                  <div className="text-muted-foreground truncate text-xs">
+                  <div className="truncate text-xs text-muted-foreground">
                     {share.grantee.email}
                   </div>
                 </div>
@@ -370,13 +430,12 @@ function ShareDialog({
 }
 
 type DriveItem =
-  | { kind: "file"; item: FileRecord }
-  | { kind: "folder"; item: FolderRecord }
+  { kind: "file"; item: FileRecord } | { kind: "folder"; item: FolderRecord }
 
 function isDescendantFolder(
   folders: FolderRecord[],
   folderId: string,
-  candidateParentId: string,
+  candidateParentId: string
 ): boolean {
   const byParent = new Map<string | null, FolderRecord[]>()
   for (const folder of folders) {
@@ -426,7 +485,9 @@ function CreateFolderDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Create folder</DialogTitle>
-          <DialogDescription>Add a folder in the current location.</DialogDescription>
+          <DialogDescription>
+            Add a folder in the current location.
+          </DialogDescription>
         </DialogHeader>
         <form
           onSubmit={(event) => {
@@ -481,7 +542,9 @@ function RenameDialog({
       <DialogContent className="sm:max-w-md" key={target?.item.id ?? "rename"}>
         <DialogHeader>
           <DialogTitle>Rename {target?.kind ?? "item"}</DialogTitle>
-          <DialogDescription>Update the visible name in your drive.</DialogDescription>
+          <DialogDescription>
+            Update the visible name in your drive.
+          </DialogDescription>
         </DialogHeader>
         <form
           onSubmit={(event) => {
@@ -569,7 +632,9 @@ function MoveDialog({
               <Button
                 key={folder.id}
                 type="button"
-                variant={effectiveSelected === folder.id ? "default" : "outline"}
+                variant={
+                  effectiveSelected === folder.id ? "default" : "outline"
+                }
                 className="justify-start"
                 onClick={() => setSelected(folder.id)}
                 disabled={disabled}
@@ -625,15 +690,15 @@ export function DriveShell() {
 
   const completedFiles = useMemo(
     () => files.filter((file) => file.state === "complete"),
-    [files],
+    [files]
   )
   const completedTrashFiles = useMemo(
     () => trashFiles.filter((file) => file.state === "complete"),
-    [trashFiles],
+    [trashFiles]
   )
   const completedSharedFiles = useMemo(
     () => sharedFiles.filter((file) => file.state === "complete"),
-    [sharedFiles],
+    [sharedFiles]
   )
 
   const visibleFiles = useMemo(() => {
@@ -724,19 +789,88 @@ export function DriveShell() {
     setUploadProgress(0)
 
     try {
-      const upload = await api.createUpload(token, {
-        filename: file.name,
-        parent_folder_id: currentFolderId,
-        content_type: file.type || "application/octet-stream",
-        size_bytes: file.size,
-        checksum_sha256: null,
-      })
+      const parentFolderId = currentFolderId
+      const contentType = file.type || "application/octet-stream"
+      const storageKey = resumableUploadKey(file, parentFolderId)
+      const stored = readStoredUploads()[storageKey]
+      let fileId: string | undefined = stored?.file_id
+      let partSizeBytes = 0
+      let confirmedParts = new Map<number, number>()
 
-      await uploadFileDirect(upload.upload_url, file, (progress) => {
-        setUploadProgress(progress.percent)
-      })
+      if (fileId) {
+        try {
+          const status = await api.getUploadStatus(token, fileId)
+          if (
+            status.state === "pending" &&
+            status.filename === file.name &&
+            status.size_bytes === file.size &&
+            status.parent_folder_id === parentFolderId &&
+            new Date(status.expires_at).getTime() > Date.now()
+          ) {
+            partSizeBytes = status.part_size_bytes
+            confirmedParts = new Map(
+              status.parts.map((part) => [part.part_number, part.size_bytes])
+            )
+          } else {
+            forgetUpload(storageKey)
+            fileId = undefined
+          }
+        } catch {
+          forgetUpload(storageKey)
+          fileId = undefined
+        }
+      }
 
-      await api.completeUpload(token, upload.file_id)
+      if (!fileId) {
+        const created = await api.createResumableUpload(token, {
+          filename: file.name,
+          parent_folder_id: parentFolderId,
+          content_type: contentType,
+          size_bytes: file.size,
+          checksum_sha256: null,
+        })
+        fileId = created.file_id
+        partSizeBytes = created.part_size_bytes
+        rememberUpload(storageKey, {
+          file_id: created.file_id,
+          filename: file.name,
+          size_bytes: file.size,
+          last_modified: file.lastModified,
+          content_type: contentType,
+          parent_folder_id: parentFolderId,
+          expires_at: created.expires_at,
+        })
+      }
+
+      let uploadedBytes = Array.from(confirmedParts.values()).reduce(
+        (sum, size) => sum + size,
+        0
+      )
+      setUploadProgress(Math.round((uploadedBytes / file.size) * 100))
+
+      const totalParts = Math.ceil(file.size / partSizeBytes)
+      for (let partNumber = 1; partNumber <= totalParts; partNumber += 1) {
+        if (confirmedParts.has(partNumber)) {
+          continue
+        }
+        const start = (partNumber - 1) * partSizeBytes
+        const end = Math.min(start + partSizeBytes, file.size)
+        const blob = file.slice(start, end)
+        const signed = await api.presignUploadPart(token, fileId, partNumber)
+        const etag = await uploadFilePart(signed.upload_url, blob, (loaded) => {
+          const current = uploadedBytes + loaded
+          setUploadProgress(Math.round((current / file.size) * 100))
+        })
+        await api.recordUploadPart(token, fileId, partNumber, {
+          size_bytes: blob.size,
+          etag,
+        })
+        uploadedBytes += blob.size
+        setUploadProgress(Math.round((uploadedBytes / file.size) * 100))
+      }
+
+      await api.finalizeResumableUpload(token, fileId)
+      forgetUpload(storageKey)
       await refreshUser()
       const response = await api.browseDrive(token, currentFolderId)
       setFolders(response.folders)
@@ -895,9 +1029,13 @@ export function DriveShell() {
     setDialogError(null)
     try {
       if (renameTarget.kind === "file") {
-        await api.updateFile(token, renameTarget.item.id, { filename: name.trim() })
+        await api.updateFile(token, renameTarget.item.id, {
+          filename: name.trim(),
+        })
       } else {
-        await api.updateFolder(token, renameTarget.item.id, { name: name.trim() })
+        await api.updateFolder(token, renameTarget.item.id, {
+          name: name.trim(),
+        })
       }
       setRenameTarget(null)
       await loadActiveView()
@@ -941,10 +1079,7 @@ export function DriveShell() {
         onViewChange={handleViewChange}
         onDownload={(fileId) => handleDownload(fileId)}
       >
-        <AppSidebar
-          activeView={activeView}
-          onViewChange={handleViewChange}
-        />
+        <AppSidebar activeView={activeView} onViewChange={handleViewChange} />
         <SidebarInset>
           <DriveHeader user={user} onLogout={handleLogout} />
 
@@ -1013,13 +1148,16 @@ export function DriveShell() {
                   </CardAction>
                 </CardHeader>
                 <CardContent>
-                  <Progress value={uploadProgress} aria-label="Upload progress" />
+                  <Progress
+                    value={uploadProgress}
+                    aria-label="Upload progress"
+                  />
                 </CardContent>
               </Card>
             )}
 
             {activeView === "my-drive" && (
-              <div className="text-muted-foreground flex flex-wrap items-center gap-1 text-sm">
+              <div className="flex flex-wrap items-center gap-1 text-sm text-muted-foreground">
                 <Button
                   type="button"
                   variant="ghost"
@@ -1083,7 +1221,7 @@ export function DriveShell() {
               </CardHeader>
               <CardContent>
                 {loadingFiles ? (
-                  <div className="text-muted-foreground flex items-center gap-2 text-sm">
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Spinner />
                     Loading files…
                   </div>
@@ -1100,7 +1238,9 @@ export function DriveShell() {
                         )}
                       </EmptyMedia>
                       <EmptyTitle>{copy.emptyTitle}</EmptyTitle>
-                      <EmptyDescription>{copy.emptyDescription}</EmptyDescription>
+                      <EmptyDescription>
+                        {copy.emptyDescription}
+                      </EmptyDescription>
                     </EmptyHeader>
                     {activeView === "my-drive" && (
                       <EmptyContent>
@@ -1116,11 +1256,11 @@ export function DriveShell() {
                     {visibleFolders.map((folder) => (
                       <div
                         key={folder.id}
-                        className="border-border flex items-center gap-3 rounded-lg border p-3"
+                        className="flex items-center gap-3 rounded-lg border border-border p-3"
                       >
                         <button
                           type="button"
-                          className="bg-muted text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-md"
+                          className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
                           onClick={() => {
                             if (activeView === "my-drive") {
                               setCurrentFolderId(folder.id)
@@ -1142,31 +1282,44 @@ export function DriveShell() {
                           >
                             {folder.name}
                           </button>
-                          <div className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                          <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                             {activeView === "trash" ? (
-                              <span>Deleted {formatDate(folder.deleted_at)}</span>
+                              <span>
+                                Deleted {formatDate(folder.deleted_at)}
+                              </span>
                             ) : (
-                              <span>Created {formatDate(folder.created_at)}</span>
+                              <span>
+                                Created {formatDate(folder.created_at)}
+                              </span>
                             )}
                           </div>
                         </div>
                         {activeView === "my-drive" ? (
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                              <Button variant="outline" size="icon" aria-label="Folder actions">
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                aria-label="Folder actions"
+                              >
                                 <MoreHorizontal />
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end" className="w-40">
                               <DropdownMenuGroup>
-                                <DropdownMenuItem onSelect={() => setCurrentFolderId(folder.id)}>
+                                <DropdownMenuItem
+                                  onSelect={() => setCurrentFolderId(folder.id)}
+                                >
                                   <FolderOpen />
                                   Open
                                 </DropdownMenuItem>
                                 <DropdownMenuItem
                                   onSelect={() => {
                                     setDialogError(null)
-                                    setRenameTarget({ kind: "folder", item: folder })
+                                    setRenameTarget({
+                                      kind: "folder",
+                                      item: folder,
+                                    })
                                   }}
                                 >
                                   <Pencil />
@@ -1175,7 +1328,10 @@ export function DriveShell() {
                                 <DropdownMenuItem
                                   onSelect={() => {
                                     setDialogError(null)
-                                    setMoveTarget({ kind: "folder", item: folder })
+                                    setMoveTarget({
+                                      kind: "folder",
+                                      item: folder,
+                                    })
                                     void loadMoveFolders()
                                   }}
                                 >
@@ -1187,7 +1343,9 @@ export function DriveShell() {
                               <DropdownMenuGroup>
                                 <DropdownMenuItem
                                   variant="destructive"
-                                  onSelect={() => void handleDeleteFolder(folder.id)}
+                                  onSelect={() =>
+                                    void handleDeleteFolder(folder.id)
+                                  }
                                   disabled={deleteId === folder.id}
                                 >
                                   <Trash2 />
@@ -1216,9 +1374,9 @@ export function DriveShell() {
                     {visibleFiles.map((file) => (
                       <div
                         key={file.id}
-                        className="border-border flex items-center gap-3 rounded-lg border p-3"
+                        className="flex items-center gap-3 rounded-lg border border-border p-3"
                       >
-                        <div className="bg-muted text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-md">
+                        <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
                           <FileIcon aria-hidden="true" />
                         </div>
                         <div className="min-w-0 flex-1">
@@ -1228,18 +1386,21 @@ export function DriveShell() {
                             </span>
                             <Badge variant="secondary">{file.state}</Badge>
                           </div>
-                          <div className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                          <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                             <span>{formatBytes(file.size_bytes)}</span>
                             {isSharedFile(file) ? (
                               <span>
-                                Owner {file.owner.display_name} ({file.owner.email})
+                                Owner {file.owner.display_name} (
+                                {file.owner.email})
                               </span>
                             ) : activeView === "trash" ? (
                               <span>Deleted {formatDate(file.deleted_at)}</span>
                             ) : (
                               <span>Created {formatDate(file.created_at)}</span>
                             )}
-                            <span>Completed {formatDate(file.completed_at)}</span>
+                            <span>
+                              Completed {formatDate(file.completed_at)}
+                            </span>
                           </div>
                         </div>
                         <div className="flex shrink-0 flex-wrap justify-end gap-2">

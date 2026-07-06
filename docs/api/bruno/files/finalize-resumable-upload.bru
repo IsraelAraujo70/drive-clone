@@ -1,0 +1,27 @@
+meta {
+  name: Finalize Resumable Upload
+  type: http
+  seq: 9
+}
+post {
+  url: {{baseUrl}}/files/uploads/{{fileId}}/finalize
+  body: none
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([200, 401, 404, 409, 502]).to.include(res.status);
+  });
+}
+
+docs {
+  Completes the multipart object, verifies final object length, marks the file complete, and increments storage usage once.
+}

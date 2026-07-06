@@ -3,7 +3,8 @@ use uuid::Uuid;
 
 use crate::application::ports::RepositoryError;
 use crate::domain::files::{
-    DriveBrowse, DriveFile, FileShare, Folder, PendingFile, SearchFileResult, SharedFile,
+    DriveBrowse, DriveFile, FileShare, Folder, PendingFile, ResumableUploadSession,
+    SearchFileResult, SharedFile, UploadPart,
 };
 
 #[derive(Debug, Clone)]
@@ -15,6 +16,36 @@ pub struct CreatePendingFileRecord {
     pub size_bytes: i64,
     pub checksum_sha256: Option<String>,
     pub object_key: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateResumableUploadRecord {
+    pub owner_id: Uuid,
+    pub filename: String,
+    pub parent_folder_id: Option<Uuid>,
+    pub content_type: String,
+    pub size_bytes: i64,
+    pub checksum_sha256: Option<String>,
+    pub object_key: String,
+    pub multipart_upload_id: String,
+    pub part_size_bytes: i64,
+    pub upload_expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RecordUploadPartRecord {
+    pub owner_id: Uuid,
+    pub file_id: Uuid,
+    pub part_number: i32,
+    pub size_bytes: i64,
+    pub etag: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExpiredUploadRecord {
+    pub file_id: Uuid,
+    pub object_key: String,
+    pub multipart_upload_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +91,35 @@ pub trait FileRepository: Send + Sync {
         &self,
         input: CreatePendingFileRecord,
     ) -> Result<PendingFile, RepositoryError>;
+
+    async fn create_resumable_upload(
+        &self,
+        input: CreateResumableUploadRecord,
+    ) -> Result<ResumableUploadSession, RepositoryError>;
+
+    async fn find_resumable_upload(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+    ) -> Result<Option<ResumableUploadSession>, RepositoryError>;
+
+    async fn record_upload_part(
+        &self,
+        input: RecordUploadPartRecord,
+    ) -> Result<UploadPart, RepositoryError>;
+
+    async fn complete_resumable_upload_once(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+        expected_size: i64,
+    ) -> Result<DriveFile, RepositoryError>;
+
+    async fn expire_resumable_uploads(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        limit: i64,
+    ) -> Result<Vec<ExpiredUploadRecord>, RepositoryError>;
 
     async fn create_folder(&self, input: CreateFolderRecord) -> Result<Folder, RepositoryError>;
 

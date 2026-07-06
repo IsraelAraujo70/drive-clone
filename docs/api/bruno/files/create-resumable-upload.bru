@@ -1,0 +1,49 @@
+meta {
+  name: Create Resumable Upload
+  type: http
+  seq: 4
+}
+post {
+  url: {{baseUrl}}/files/uploads/resumable
+  body: json
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "filename": "bruno-resumable.bin",
+    "parent_folder_id": null,
+    "content_type": "application/octet-stream",
+    "size_bytes": "{{sizeBytes}}",
+    "checksum_sha256": null,
+    "part_size_bytes": "{{partSizeBytes}}"
+  }
+}
+
+tests {
+  if (res.body && res.body.file_id) {
+    bru.setVar('fileId', res.body.file_id);
+  }
+  if (res.body && res.body.object_key) {
+    bru.setVar('objectKey', res.body.object_key);
+  }
+  if (res.body && res.body.part_size_bytes) {
+    bru.setVar('partSizeBytes', String(res.body.part_size_bytes));
+  }
+
+  test("response status is documented", function() {
+    expect([201, 401, 404, 409, 413, 422, 502]).to.include(res.status);
+  });
+}
+
+docs {
+  Creates a resumable multipart upload session. Prefer this flow for new clients. Saves file id and object key to the active environment.
+}

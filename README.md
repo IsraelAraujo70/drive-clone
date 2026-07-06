@@ -10,18 +10,14 @@ The first version should be a working personal cloud drive. Current implemented
 scope:
 
 - Sign up and log in.
-- Upload files through a signed direct single-object upload flow.
+- Upload files through resumable multipart uploads, with the direct single-object
+  upload flow kept for compatibility.
 - Browse files and folders.
 - Download files.
 - Rename, move, delete, and restore items.
 - See storage usage.
 - Share files with another registered user by email.
 - Search files by name.
-
-Next milestone:
-
-- Resumable uploads with upload sessions, part tracking, status lookup,
-  finalization, expiration, and cleanup.
 
 Future extensions:
 
@@ -41,7 +37,9 @@ Use a services-first architecture:
 - `contracts`: shared API and schema documentation.
 - `docs`: architecture diagrams, deployment notes, and eval reports.
 
-The backend owns metadata, authorization, direct upload completion, quota enforcement, and future sync semantics. File bytes live in S3-compatible object storage. PostgreSQL stores durable metadata.
+The backend owns metadata, authorization, direct and resumable upload completion,
+quota enforcement, and future sync semantics. File bytes live in S3-compatible
+object storage. PostgreSQL stores durable metadata.
 
 ## Repository Structure
 
@@ -84,6 +82,8 @@ Backend API:
 - Authentication and sessions.
 - File and folder metadata.
 - Direct upload creation and completion.
+- Resumable multipart upload sessions, parts, status, finalization, expiration,
+  and cleanup.
 - Download authorization.
 - User-to-user sharing by email.
 - Search.
@@ -95,7 +95,8 @@ Frontend:
 - Login and signup screens.
 - Drive browser.
 - Folder navigation.
-- Upload progress for the current direct upload flow.
+- Upload progress for resumable multipart uploads, with local session memory for
+  continuing after selecting the same file again.
 - File actions.
 - Trash and restore flows.
 - User-to-user sharing controls.
@@ -146,12 +147,11 @@ Current metadata concepts:
 - `folders`: user-owned folder tree.
 - `files`: file-specific metadata, parent folder, object key, checksum, size,
   upload state, and trash state.
+- `upload_parts`: confirmed object-storage parts for resumable uploads.
 - `file_shares`: user-to-user file grants by registered account.
 
 Future metadata concepts:
 
-- `upload_sessions`: resumable upload lifecycle.
-- `upload_parts`: confirmed object-storage parts for resumable uploads.
 - `share_links`: revocable private sharing tokens.
 - `change_log`: ordered events for sync clients.
 
@@ -161,7 +161,9 @@ then verifies object length before marking the file `complete`.
 
 ## Upload Design
 
-Current implementation:
+Current implementation supports two upload paths.
+
+Compatibility direct upload:
 
 1. Client calls `POST /files/uploads` with filename, size, parent folder,
    content type, and optional checksum metadata.
@@ -172,20 +174,33 @@ Current implementation:
 6. API verifies the stored object length, marks the file `complete`, and
    increments storage usage exactly once.
 
-Future resumable uploads should use an explicit state machine:
+Resumable multipart upload:
 
-- `created`
-- `receiving`
-- `finalizing`
+1. Client calls `POST /files/uploads/resumable` with file metadata.
+2. API checks quota and limits, starts an object-storage multipart upload, and
+   stores the pending session.
+3. Client calls `GET /files/uploads/{file_id}/status` to discover confirmed
+   parts.
+4. Client signs each missing part through `POST /files/uploads/{file_id}/parts`.
+5. Client uploads that byte range directly to object storage and reads the
+   `ETag` response header.
+6. Client records the part with
+   `POST /files/uploads/{file_id}/parts/{part_number}`.
+7. Client calls `POST /files/uploads/{file_id}/finalize`.
+8. API completes the multipart upload, verifies final object length, marks the
+   file `complete`, and increments storage usage exactly once.
+
+Resumable uploads use an explicit state machine:
+
+- `pending`
 - `complete`
-- `failed`
 - `expired`
 
 Measurable outcomes:
 
 - Failed uploads do not become visible files.
 - Completed uploads produce one metadata record and one stored object.
-- Future resume state can be queried deterministically.
+- Resume state can be queried deterministically.
 - The backend never needs to load a 15 GB file into memory.
 
 ## Download Design
@@ -319,18 +334,19 @@ Delivered:
 Done: users can share a file with another registered user, revoke that access,
 and search accessible files without leaking private files.
 
-### Next: Resumable Uploads
+### Implemented: Resumable Uploads
 
-Deliver:
+Delivered:
 
 - Upload session API.
-- Chunk tracking.
+- Part tracking.
 - Resume status endpoint.
 - Frontend resume behavior.
 - Expiration cleanup job.
 - Tests and evals for interrupted uploads.
 
-Done when a browser refresh or network interruption can resume a partially uploaded file without restarting completed chunks.
+Done: selecting the same file again can resume from server-confirmed parts
+instead of restarting the full upload.
 
 ### Future: Sync API and Rust Client
 
@@ -371,14 +387,15 @@ Required gate test coverage:
 - Folder tree integrity.
 - Search scoping.
 - Direct upload completion idempotency and object length validation.
-- Future upload session state transitions.
-- Future part resume logic.
+- Upload session state transitions.
+- Part resume logic.
 - Future sync cursor ordering.
 - Future conflict behavior.
 
 Integration tests should cover:
 
 - Upload metadata plus object storage write.
+- Resumable multipart upload against MinIO.
 - Download authorization plus object storage read.
 - Delete and restore lifecycle.
 - Expired upload cleanup.
@@ -389,7 +406,7 @@ Eval scenarios should cover:
 
 - 15 GB upload design review: the upload path sends file bytes directly to object storage and never requires the full file in API memory.
 - Direct upload correctness: upload bytes through the signed URL, complete the file, request a download URL, and byte-compare the result.
-- Future resume correctness: interrupt after several parts, continue from recorded progress, and verify final checksum.
+- Resume correctness: upload one part, query status, continue from recorded progress, finalize, and byte-compare the result.
 - Quota behavior: fill an account near 15 GB and reject the next upload with a clear error.
 - Future sync convergence: apply remote changes, fetch from a cursor, and verify client state.
 - Access control: attempt cross-user reads, downloads, and searches.
@@ -401,7 +418,7 @@ Track:
 
 - Upload success rate.
 - Upload failure rate by reason.
-- Future resume success rate.
+- Resume success rate.
 - Download success and error rates.
 - Storage used per user.
 - Quota rejection count.
@@ -418,9 +435,10 @@ Track:
 4. Move the file into the folder.
 5. Download the file.
 6. Delete and restore the file.
-7. Create and revoke a user share.
-8. Search for the file.
-9. Show deployment health and test results.
+7. Start a resumable upload, confirm status after the first part, and finish it.
+8. Create and revoke a user share.
+9. Search for the file.
+10. Show deployment health and test results.
 
 ## Local Development
 
@@ -454,6 +472,7 @@ make ps
 make down
 make test
 make eval-upload
+make eval-resumable
 make clean
 ```
 
@@ -495,6 +514,7 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5433/drive_clone cargo test
 # Upload smoke against the running API and MinIO
 cd ../..
 bash docs/evals/minio-upload-smoke.sh
+bash docs/evals/resumable-upload-smoke.sh
 
 # Web: vitest
 cd apps/web
@@ -507,14 +527,16 @@ Implemented so far:
 
 - Landing page, signup, and login (English UI) with a protected `/drive` shell, built on Next.js + Tailwind CSS + shadcn/ui.
 - Rust API on Axum + SQLx + PostgreSQL: `POST /auth/signup`, `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, and a DB-aware `GET /health`.
-- File upload/download backend: `POST /files/uploads`, `POST /files/{file_id}/complete`, `GET /files`, and `GET /files/{file_id}/download`.
+- File upload/download backend: direct upload compatibility plus resumable
+  multipart upload sessions, part signing, status, finalization, cleanup,
+  `GET /files`, and `GET /files/{file_id}/download`.
 - Folder organization backend and UI: `POST /folders`, `GET /drive`, `GET /folders`, `PATCH /files/{file_id}`, `PATCH /folders/{folder_id}`, recursive folder trash/restore, and `/drive` folder browsing.
 - Soft delete/trash/restore for files and folders.
 - User-to-user file sharing by email, shared-with-me, and revoke.
 - Filename search with owned/shared ACL scoping, trash excluded by default, PostgreSQL search indexes, command-palette UI, and search smoke eval.
 - Argon2 password hashing; opaque bearer session tokens stored hashed (SHA-256) with 30-day expiry.
 - Auth contract in `contracts/auth.md`; files contract in `contracts/files.md`; migrations in `services/api/migrations`.
-- Gate tests: API validation/token tests plus full HTTP auth/file/folder/share/trash flows against real Postgres, and web tests.
+- Gate tests: API validation/token tests plus full HTTP auth/file/folder/share/trash/resumable-upload flows against real Postgres, and web tests.
 - Repo-connected Railway deployments for the API and web services.
 
-Next milestone: resumable uploads. Share links, sync API, and a local Rust sync client are intentionally outside the current implementation cut.
+Next milestone: share links, sync API, and a local Rust sync client are intentionally outside the current implementation cut.

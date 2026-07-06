@@ -86,6 +86,48 @@ export type CreateUploadResponse = {
   expires_at: string
 }
 
+export type CreateResumableUploadInput = CreateUploadInput & {
+  part_size_bytes?: number | null
+}
+
+export type CreateResumableUploadResponse = {
+  file_id: string
+  object_key: string
+  part_size_bytes: number
+  expires_at: string
+}
+
+export type UploadPartRecord = {
+  part_number: number
+  size_bytes: number
+  etag: string
+}
+
+export type UploadStatusResponse = {
+  file_id: string
+  filename: string
+  parent_folder_id: string | null
+  content_type: string
+  size_bytes: number
+  checksum_sha256: string | null
+  object_key: string
+  state: "pending" | "complete" | "expired"
+  part_size_bytes: number
+  expires_at: string
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+  parts: UploadPartRecord[]
+}
+
+export type PresignUploadPartResponse = {
+  file_id: string
+  part_number: number
+  upload_url: string
+  expires_at: string
+  expected_size_bytes: number
+}
+
 export type ListFilesResponse = {
   files: FileRecord[]
 }
@@ -129,7 +171,7 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     public code: string,
-    message: string,
+    message: string
   ) {
     super(message)
     this.name = "ApiError"
@@ -142,7 +184,10 @@ type RequestOptions = {
   body?: unknown
 }
 
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+async function request<T>(
+  path: string,
+  options: RequestOptions = {}
+): Promise<T> {
   const headers: Record<string, string> = {}
   if (options.body !== undefined) {
     headers["Content-Type"] = "application/json"
@@ -166,7 +211,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     throw new ApiError(
       response.status,
       data?.error ?? "unknown_error",
-      data?.message ?? "Something went wrong. Try again.",
+      data?.message ?? "Something went wrong. Try again."
     )
   }
   return data as T
@@ -175,7 +220,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 export function uploadFileDirect(
   uploadUrl: string,
   file: File,
-  onProgress?: (progress: DirectUploadProgress) => void,
+  onProgress?: (progress: DirectUploadProgress) => void
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
@@ -210,8 +255,54 @@ export function uploadFileDirect(
     })
 
     xhr.open("PUT", uploadUrl)
-    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream")
+    xhr.setRequestHeader(
+      "Content-Type",
+      file.type || "application/octet-stream"
+    )
     xhr.send(file)
+  })
+}
+
+export function uploadFilePart(
+  uploadUrl: string,
+  blob: Blob,
+  onProgress?: (loaded: number, total: number) => void
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+
+    xhr.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable) {
+        onProgress?.(event.loaded, event.total)
+      }
+    })
+
+    xhr.addEventListener("load", () => {
+      if (xhr.status >= 200 && xhr.status < 400) {
+        const etag = xhr.getResponseHeader("ETag")
+        if (!etag) {
+          reject(
+            new Error("Upload part completed without an ETag response header")
+          )
+          return
+        }
+        resolve(etag)
+        return
+      }
+
+      reject(new Error(`Upload part failed with status ${xhr.status}`))
+    })
+
+    xhr.addEventListener("error", () => {
+      reject(new Error("Upload part failed"))
+    })
+
+    xhr.addEventListener("abort", () => {
+      reject(new Error("Upload part aborted"))
+    })
+
+    xhr.open("PUT", uploadUrl)
+    xhr.send(blob)
   })
 }
 
@@ -220,7 +311,8 @@ export const api = {
     request<AuthResponse>("/auth/signup", { method: "POST", body: input }),
   login: (input: { email: string; password: string }) =>
     request<AuthResponse>("/auth/login", { method: "POST", body: input }),
-  logout: (token: string) => request<void>("/auth/logout", { method: "POST", token }),
+  logout: (token: string) =>
+    request<void>("/auth/logout", { method: "POST", token }),
   me: (token: string) => request<User>("/auth/me", { token }),
   createUpload: (token: string, input: CreateUploadInput) =>
     request<CreateUploadResponse>("/files/uploads", {
@@ -228,7 +320,40 @@ export const api = {
       token,
       body: input,
     }),
-  createFolder: (token: string, input: { name: string; parent_folder_id?: string | null }) =>
+  createResumableUpload: (token: string, input: CreateResumableUploadInput) =>
+    request<CreateResumableUploadResponse>("/files/uploads/resumable", {
+      method: "POST",
+      token,
+      body: input,
+    }),
+  getUploadStatus: (token: string, fileId: string) =>
+    request<UploadStatusResponse>(`/files/uploads/${fileId}/status`, { token }),
+  presignUploadPart: (token: string, fileId: string, partNumber: number) =>
+    request<PresignUploadPartResponse>(`/files/uploads/${fileId}/parts`, {
+      method: "POST",
+      token,
+      body: { part_number: partNumber },
+    }),
+  recordUploadPart: (
+    token: string,
+    fileId: string,
+    partNumber: number,
+    input: { size_bytes: number; etag: string }
+  ) =>
+    request<UploadPartRecord>(`/files/uploads/${fileId}/parts/${partNumber}`, {
+      method: "POST",
+      token,
+      body: input,
+    }),
+  finalizeResumableUpload: (token: string, fileId: string) =>
+    request<FileRecord>(`/files/uploads/${fileId}/finalize`, {
+      method: "POST",
+      token,
+    }),
+  createFolder: (
+    token: string,
+    input: { name: string; parent_folder_id?: string | null }
+  ) =>
     request<FolderRecord>("/folders", {
       method: "POST",
       token,
@@ -248,7 +373,7 @@ export const api = {
   updateFile: (
     token: string,
     fileId: string,
-    input: { filename?: string; parent_folder_id?: string | null },
+    input: { filename?: string; parent_folder_id?: string | null }
   ) =>
     request<FileRecord>(`/files/${fileId}`, {
       method: "PATCH",
@@ -258,7 +383,7 @@ export const api = {
   updateFolder: (
     token: string,
     folderId: string,
-    input: { name?: string; parent_folder_id?: string | null },
+    input: { name?: string; parent_folder_id?: string | null }
   ) =>
     request<FolderRecord>(`/folders/${folderId}`, {
       method: "PATCH",
@@ -272,8 +397,12 @@ export const api = {
   restoreFile: (token: string, fileId: string) =>
     request<FileRecord>(`/files/${fileId}/restore`, { method: "POST", token }),
   restoreFolder: (token: string, folderId: string) =>
-    request<FolderRecord>(`/folders/${folderId}/restore`, { method: "POST", token }),
-  listTrash: (token: string) => request<ListFilesResponse>("/files/trash", { token }),
+    request<FolderRecord>(`/folders/${folderId}/restore`, {
+      method: "POST",
+      token,
+    }),
+  listTrash: (token: string) =>
+    request<ListFilesResponse>("/files/trash", { token }),
   listDriveTrash: (token: string) =>
     request<DriveBrowseResponse>("/drive/trash", { token }),
   shareFile: (token: string, fileId: string, email: string) =>
@@ -294,11 +423,14 @@ export const api = {
   searchFiles: (
     token: string,
     query: string,
-    options: { include_deleted?: boolean; limit?: number } = {},
+    options: { include_deleted?: boolean; limit?: number } = {}
   ) => {
     const trimmed = query.trim()
     if (!trimmed) {
-      return Promise.resolve({ query: trimmed, files: [] } satisfies SearchFilesResponse)
+      return Promise.resolve({
+        query: trimmed,
+        files: [],
+      } satisfies SearchFilesResponse)
     }
 
     const params = [`q=${encodeURIComponent(trimmed)}`]
@@ -309,7 +441,9 @@ export const api = {
       params.push(`limit=${String(options.limit)}`)
     }
 
-    return request<SearchFilesResponse>(`/search?${params.join("&")}`, { token })
+    return request<SearchFilesResponse>(`/search?${params.join("&")}`, {
+      token,
+    })
   },
   createDownload: (token: string, fileId: string) =>
     request<DownloadResponse>(`/files/${fileId}/download`, { token }),

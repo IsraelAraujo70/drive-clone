@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 
 use crate::application::ports::StorageError;
-use crate::application::ports::object_storage::{ObjectMetadata, ObjectStorage, PresignedUrl};
+use crate::application::ports::object_storage::{
+    CompletedUploadPart, ObjectMetadata, ObjectStorage, PresignedUrl,
+};
 
 #[derive(Debug, Default)]
 pub struct DisabledObjectStorage;
@@ -27,6 +29,41 @@ impl ObjectStorage for DisabledObjectStorage {
     }
 
     async fn head_object(&self, _object_key: &str) -> Result<ObjectMetadata, StorageError> {
+        Err(StorageError::Unexpected)
+    }
+
+    async fn create_multipart_upload(
+        &self,
+        _object_key: &str,
+        _content_type: &str,
+    ) -> Result<String, StorageError> {
+        Err(StorageError::Unexpected)
+    }
+
+    async fn presign_upload_part(
+        &self,
+        _object_key: &str,
+        _upload_id: &str,
+        _part_number: i32,
+        _ttl_seconds: i64,
+    ) -> Result<PresignedUrl, StorageError> {
+        Err(StorageError::Unexpected)
+    }
+
+    async fn complete_multipart_upload(
+        &self,
+        _object_key: &str,
+        _upload_id: &str,
+        _parts: &[CompletedUploadPart],
+    ) -> Result<(), StorageError> {
+        Err(StorageError::Unexpected)
+    }
+
+    async fn abort_multipart_upload(
+        &self,
+        _object_key: &str,
+        _upload_id: &str,
+    ) -> Result<(), StorageError> {
         Err(StorageError::Unexpected)
     }
 }

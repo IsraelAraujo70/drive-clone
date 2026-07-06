@@ -5,10 +5,10 @@ pub mod validators;
 
 pub use file::{
     DriveBrowse, DriveFile, FileShare, FileState, FileUser, Folder, FolderPathEntry, PendingFile,
-    SearchAccess, SearchFileResult, SharedFile,
+    ResumableUploadSession, SearchAccess, SearchFileResult, SharedFile, UploadPart,
 };
 pub use quota::ensure_quota;
-pub use upload::UploadRequest;
+pub use upload::{ResumableUploadRequest, UploadRequest};
 pub use validators::{
     validate_checksum, validate_content_type, validate_filename, validate_folder_name,
     validate_search_query, validate_size,

@@ -1,0 +1,27 @@
+meta {
+  name: Direct PUT Upload Part URL
+  type: http
+  seq: 7
+}
+put {
+  url: {{partUploadUrl}}
+  body: text
+  auth: none
+}
+headers {
+  Accept: application/json
+}
+
+body:text {
+hello bruno part
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([200, 201, 204, 403]).to.include(res.status);
+  });
+}
+
+docs {
+  Uploads raw part bytes to the presigned object-storage URL returned by Sign Upload Part. Real resumable runs must upload exactly expected_size_bytes and preserve the ETag response header.
+}

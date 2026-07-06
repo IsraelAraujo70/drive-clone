@@ -5,6 +5,7 @@ use uuid::Uuid;
 pub enum FileState {
     Pending,
     Complete,
+    Expired,
 }
 
 impl FileState {
@@ -12,6 +13,7 @@ impl FileState {
         match self {
             Self::Pending => "pending",
             Self::Complete => "complete",
+            Self::Expired => "expired",
         }
     }
 }
@@ -20,6 +22,7 @@ impl From<String> for FileState {
     fn from(value: String) -> Self {
         match value.as_str() {
             "complete" => Self::Complete,
+            "expired" => Self::Expired,
             _ => Self::Pending,
         }
     }
@@ -71,6 +74,33 @@ pub struct PendingFile {
     pub size_bytes: i64,
     pub object_key: String,
     pub state: FileState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UploadPart {
+    pub part_number: i32,
+    pub size_bytes: i64,
+    pub etag: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResumableUploadSession {
+    pub file_id: Uuid,
+    pub owner_id: Uuid,
+    pub filename: String,
+    pub parent_folder_id: Option<Uuid>,
+    pub content_type: String,
+    pub size_bytes: i64,
+    pub checksum_sha256: Option<String>,
+    pub object_key: String,
+    pub multipart_upload_id: String,
+    pub part_size_bytes: i64,
+    pub state: FileState,
+    pub upload_expires_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub parts: Vec<UploadPart>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

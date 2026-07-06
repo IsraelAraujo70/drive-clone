@@ -6,12 +6,13 @@ use uuid::Uuid;
 use crate::adapters::postgres::tx::map_sqlx_error;
 use crate::application::ports::RepositoryError;
 use crate::application::ports::files::{
-    CreateFolderRecord, CreatePendingFileRecord, FileRepository, SearchFilesRecord,
-    UpdateFileRecord, UpdateFolderRecord,
+    CreateFolderRecord, CreatePendingFileRecord, CreateResumableUploadRecord, ExpiredUploadRecord,
+    FileRepository, RecordUploadPartRecord, SearchFilesRecord, UpdateFileRecord,
+    UpdateFolderRecord,
 };
 use crate::domain::files::{
     DriveBrowse, DriveFile, FileShare, FileState, FileUser, Folder, FolderPathEntry, PendingFile,
-    SearchAccess, SearchFileResult, SharedFile,
+    ResumableUploadSession, SearchAccess, SearchFileResult, SharedFile, UploadPart,
 };
 
 #[derive(Debug, Clone)]
@@ -105,6 +106,65 @@ impl PostgresFileRepository {
                 name: row.name,
             })
             .collect())
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct UploadPartRow {
+    part_number: i32,
+    size_bytes: i64,
+    etag: String,
+}
+
+impl From<UploadPartRow> for UploadPart {
+    fn from(row: UploadPartRow) -> Self {
+        Self {
+            part_number: row.part_number,
+            size_bytes: row.size_bytes,
+            etag: row.etag,
+        }
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct ResumableUploadRow {
+    id: Uuid,
+    owner_id: Uuid,
+    filename: String,
+    parent_folder_id: Option<Uuid>,
+    content_type: String,
+    size_bytes: i64,
+    checksum_sha256: Option<String>,
+    object_key: String,
+    state: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    completed_at: Option<DateTime<Utc>>,
+    multipart_upload_id: String,
+    upload_expires_at: DateTime<Utc>,
+    part_size_bytes: i64,
+}
+
+impl ResumableUploadRow {
+    fn into_session(self, parts: Vec<UploadPart>) -> ResumableUploadSession {
+        ResumableUploadSession {
+            file_id: self.id,
+            owner_id: self.owner_id,
+            filename: self.filename,
+            parent_folder_id: self.parent_folder_id,
+            content_type: self.content_type,
+            size_bytes: self.size_bytes,
+            checksum_sha256: self.checksum_sha256,
+            object_key: self.object_key,
+            multipart_upload_id: self.multipart_upload_id,
+            part_size_bytes: self.part_size_bytes,
+            state: self.state.into(),
+            upload_expires_at: self.upload_expires_at,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            completed_at: self.completed_at,
+            parts,
+        }
     }
 }
 
@@ -360,6 +420,217 @@ impl FileRepository for PostgresFileRepository {
 
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(pending.into())
+    }
+
+    async fn create_resumable_upload(
+        &self,
+        input: CreateResumableUploadRecord,
+    ) -> Result<ResumableUploadSession, RepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        Self::ensure_active_parent(&mut tx, input.owner_id, input.parent_folder_id).await?;
+
+        let row = sqlx::query_as::<_, ResumableUploadRow>(
+            "INSERT INTO files (
+                owner_id, filename, parent_folder_id, content_type, size_bytes,
+                checksum_sha256, object_key, state, upload_kind, multipart_upload_id,
+                upload_expires_at, part_size_bytes
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', 'resumable', $8, $9, $10)
+             RETURNING id, owner_id, filename, parent_folder_id, content_type, size_bytes,
+                checksum_sha256, object_key, state, created_at, updated_at, completed_at,
+                multipart_upload_id, upload_expires_at, part_size_bytes",
+        )
+        .bind(input.owner_id)
+        .bind(&input.filename)
+        .bind(input.parent_folder_id)
+        .bind(&input.content_type)
+        .bind(input.size_bytes)
+        .bind(&input.checksum_sha256)
+        .bind(&input.object_key)
+        .bind(&input.multipart_upload_id)
+        .bind(input.upload_expires_at)
+        .bind(input.part_size_bytes)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(row.into_session(Vec::new()))
+    }
+
+    async fn find_resumable_upload(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+    ) -> Result<Option<ResumableUploadSession>, RepositoryError> {
+        let Some(row) = sqlx::query_as::<_, ResumableUploadRow>(
+            "SELECT id, owner_id, filename, parent_folder_id, content_type, size_bytes,
+                checksum_sha256, object_key, state, created_at, updated_at, completed_at,
+                multipart_upload_id, upload_expires_at, part_size_bytes
+             FROM files
+             WHERE id = $1 AND owner_id = $2 AND upload_kind = 'resumable'",
+        )
+        .bind(file_id)
+        .bind(owner_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?
+        else {
+            return Ok(None);
+        };
+
+        let parts = sqlx::query_as::<_, UploadPartRow>(
+            "SELECT part_number, size_bytes, etag
+             FROM upload_parts
+             WHERE file_id = $1
+             ORDER BY part_number ASC",
+        )
+        .bind(file_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?
+        .into_iter()
+        .map(Into::into)
+        .collect();
+
+        Ok(Some(row.into_session(parts)))
+    }
+
+    async fn record_upload_part(
+        &self,
+        input: RecordUploadPartRecord,
+    ) -> Result<UploadPart, RepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+
+        let upload: Option<(String, i64)> = sqlx::query_as(
+            "SELECT state, size_bytes
+             FROM files
+             WHERE id = $1 AND owner_id = $2 AND upload_kind = 'resumable'
+             FOR UPDATE",
+        )
+        .bind(input.file_id)
+        .bind(input.owner_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        let Some((state, size_bytes)) = upload else {
+            return Err(RepositoryError::NotFound);
+        };
+        if state != FileState::Pending.as_str()
+            || input.size_bytes <= 0
+            || input.size_bytes > size_bytes
+        {
+            return Err(RepositoryError::InvalidState);
+        }
+
+        let part = sqlx::query_as::<_, UploadPartRow>(
+            "INSERT INTO upload_parts (file_id, part_number, size_bytes, etag)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (file_id, part_number)
+             DO UPDATE SET size_bytes = EXCLUDED.size_bytes, etag = EXCLUDED.etag, updated_at = now()
+             RETURNING part_number, size_bytes, etag",
+        )
+        .bind(input.file_id)
+        .bind(input.part_number)
+        .bind(input.size_bytes)
+        .bind(input.etag)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(part.into())
+    }
+
+    async fn complete_resumable_upload_once(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+        expected_size: i64,
+    ) -> Result<DriveFile, RepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let locked = sqlx::query_as::<_, PendingFileRow>(
+            "SELECT id, size_bytes, object_key, state
+             FROM files
+             WHERE id = $1 AND owner_id = $2 AND upload_kind = 'resumable'
+             FOR UPDATE",
+        )
+        .bind(file_id)
+        .bind(owner_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?
+        .ok_or(RepositoryError::NotFound)?;
+
+        if locked.state != FileState::Pending.as_str() || locked.size_bytes != expected_size {
+            return Err(RepositoryError::InvalidState);
+        }
+
+        let updated = sqlx::query_as::<_, DriveFileRow>(
+            "UPDATE files
+             SET state = 'complete', completed_at = now(), updated_at = now()
+             WHERE id = $1 AND owner_id = $2 AND state = 'pending'
+             RETURNING id, filename, parent_folder_id, content_type, size_bytes, checksum_sha256, object_key, state, created_at, updated_at, completed_at, deleted_at",
+        )
+        .bind(file_id)
+        .bind(owner_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?
+        .ok_or(RepositoryError::InvalidState)?;
+
+        sqlx::query(
+            "UPDATE users
+             SET storage_used_bytes = storage_used_bytes + $1
+             WHERE id = $2",
+        )
+        .bind(locked.size_bytes)
+        .bind(owner_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(updated.into())
+    }
+
+    async fn expire_resumable_uploads(
+        &self,
+        now: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<ExpiredUploadRecord>, RepositoryError> {
+        let rows = sqlx::query_as::<_, (Uuid, String, String)>(
+            "UPDATE files
+             SET state = 'expired', updated_at = now()
+             WHERE id IN (
+                SELECT id
+                FROM files
+                WHERE upload_kind = 'resumable'
+                  AND state = 'pending'
+                  AND upload_expires_at < $1
+                ORDER BY upload_expires_at ASC, id ASC
+                LIMIT $2
+                FOR UPDATE SKIP LOCKED
+             )
+             RETURNING id, object_key, multipart_upload_id",
+        )
+        .bind(now)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        Ok(rows
+            .into_iter()
+            .map(
+                |(file_id, object_key, multipart_upload_id)| ExpiredUploadRecord {
+                    file_id,
+                    object_key,
+                    multipart_upload_id,
+                },
+            )
+            .collect())
     }
 
     async fn create_folder(&self, input: CreateFolderRecord) -> Result<Folder, RepositoryError> {

@@ -7,7 +7,9 @@ Current scope:
 - Provide a deployable HTTP service.
 - Expose `/health` for Railway health checks.
 - Authenticate users.
-- Create direct-upload sessions, verify completed objects, list completed files, and return authorized download URLs.
+- Create direct-upload sessions, create resumable multipart upload sessions,
+  sign and record parts, finalize completed objects, list completed files, and
+  return authorized download URLs.
 - Create and browse folders, rename/move files and folders, and recursively trash/restore folder trees.
 - Share files by grantee email and list files shared with the current user.
 
@@ -39,6 +41,7 @@ Useful live evals from the repo root:
 
 ```bash
 bash docs/evals/minio-upload-smoke.sh
+bash docs/evals/resumable-upload-smoke.sh
 bash docs/evals/share-delete-smoke.sh
 bash docs/evals/folder-organization-smoke.sh
 ```
@@ -79,3 +82,7 @@ cargo run
 If the web dev server uses another port, add that exact origin to `CORS_ALLOWED_ORIGINS`, for example `http://localhost:3100`.
 
 When the API runs inside Docker and the browser runs on the host, sign URLs with `S3_PUBLIC_ENDPOINT_URL=http://localhost:9000` while using `S3_ENDPOINT_URL=http://minio:9000` for server-side object HEAD checks. The signed URL host must match the host the browser sends to MinIO. Railway buckets use `S3_URL_STYLE=virtual-host`.
+
+Browser resumable uploads must be able to read the object-storage `ETag`
+response header after each part PUT. Configure bucket CORS to allow `PUT`,
+`GET`, and `HEAD` from the web origin and expose `ETag`.

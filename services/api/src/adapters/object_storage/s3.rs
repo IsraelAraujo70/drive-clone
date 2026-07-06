@@ -7,7 +7,9 @@ use sha2::{Digest, Sha256};
 use url::Url;
 
 use crate::application::ports::StorageError;
-use crate::application::ports::object_storage::{ObjectMetadata, ObjectStorage, PresignedUrl};
+use crate::application::ports::object_storage::{
+    CompletedUploadPart, ObjectMetadata, ObjectStorage, PresignedUrl,
+};
 
 #[derive(Debug, Clone)]
 pub struct S3ObjectStorage {
@@ -76,15 +78,22 @@ impl S3ObjectStorage {
         object_key: &str,
         ttl_seconds: i64,
     ) -> Result<PresignedUrl, StorageError> {
-        self.presign_with_base(method, &self.public_endpoint_url, object_key, ttl_seconds)
+        self.presign_with_query(
+            method,
+            &self.public_endpoint_url,
+            object_key,
+            ttl_seconds,
+            &[],
+        )
     }
 
-    fn presign_with_base(
+    fn presign_with_query(
         &self,
         method: &str,
         base_url: &Url,
         object_key: &str,
         ttl_seconds: i64,
+        extra_query: &[(&str, String)],
     ) -> Result<PresignedUrl, StorageError> {
         let now = Utc::now();
         let expires_at = now + Duration::seconds(ttl_seconds);
@@ -106,6 +115,9 @@ impl S3ObjectStorage {
             query.append_pair("X-Amz-Date", &amz_date);
             query.append_pair("X-Amz-Expires", &ttl_seconds.to_string());
             query.append_pair("X-Amz-SignedHeaders", "host");
+            for (key, value) in extra_query {
+                query.append_pair(key, value);
+            }
         }
 
         let canonical_query = canonical_query(&url);
@@ -126,6 +138,30 @@ impl S3ObjectStorage {
             url: url.to_string(),
             expires_at,
         })
+    }
+
+    async fn signed_request(
+        &self,
+        method: &str,
+        object_key: &str,
+        query: &[(&str, String)],
+        body: Option<String>,
+        content_type: Option<&str>,
+    ) -> Result<reqwest::Response, StorageError> {
+        let url = self
+            .presign_with_query(method, &self.endpoint_url, object_key, 60, query)?
+            .url;
+        let client = reqwest::Client::new();
+        let method =
+            reqwest::Method::from_bytes(method.as_bytes()).map_err(|_| StorageError::Unexpected)?;
+        let mut request = client.request(method, url);
+        if let Some(content_type) = content_type {
+            request = request.header(reqwest::header::CONTENT_TYPE, content_type);
+        }
+        if let Some(body) = body {
+            request = request.body(body);
+        }
+        request.send().await.map_err(|_| StorageError::Unexpected)
     }
 }
 
@@ -151,7 +187,7 @@ impl ObjectStorage for S3ObjectStorage {
 
     async fn head_object(&self, object_key: &str) -> Result<ObjectMetadata, StorageError> {
         let url = self
-            .presign_with_base("HEAD", &self.endpoint_url, object_key, 60)?
+            .presign_with_query("HEAD", &self.endpoint_url, object_key, 60, &[])?
             .url;
         let response = reqwest::Client::new()
             .head(url)
@@ -169,6 +205,124 @@ impl ObjectStorage for S3ObjectStorage {
             .ok_or(StorageError::Unexpected)?;
         Ok(ObjectMetadata { content_length })
     }
+
+    async fn create_multipart_upload(
+        &self,
+        object_key: &str,
+        content_type: &str,
+    ) -> Result<String, StorageError> {
+        let response = self
+            .signed_request(
+                "POST",
+                object_key,
+                &[("uploads", String::new())],
+                None,
+                Some(content_type),
+            )
+            .await?;
+        if !response.status().is_success() {
+            return Err(StorageError::Unexpected);
+        }
+        let body = response
+            .text()
+            .await
+            .map_err(|_| StorageError::Unexpected)?;
+        extract_xml_text(&body, "UploadId").ok_or(StorageError::Unexpected)
+    }
+
+    async fn presign_upload_part(
+        &self,
+        object_key: &str,
+        upload_id: &str,
+        part_number: i32,
+        ttl_seconds: i64,
+    ) -> Result<PresignedUrl, StorageError> {
+        self.presign_with_query(
+            "PUT",
+            &self.public_endpoint_url,
+            object_key,
+            ttl_seconds,
+            &[
+                ("partNumber", part_number.to_string()),
+                ("uploadId", upload_id.to_string()),
+            ],
+        )
+    }
+
+    async fn complete_multipart_upload(
+        &self,
+        object_key: &str,
+        upload_id: &str,
+        parts: &[CompletedUploadPart],
+    ) -> Result<(), StorageError> {
+        let body = complete_multipart_xml(parts);
+        let response = self
+            .signed_request(
+                "POST",
+                object_key,
+                &[("uploadId", upload_id.to_string())],
+                Some(body),
+                Some("application/xml"),
+            )
+            .await?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(StorageError::Unexpected)
+        }
+    }
+
+    async fn abort_multipart_upload(
+        &self,
+        object_key: &str,
+        upload_id: &str,
+    ) -> Result<(), StorageError> {
+        let response = self
+            .signed_request(
+                "DELETE",
+                object_key,
+                &[("uploadId", upload_id.to_string())],
+                None,
+                None,
+            )
+            .await?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(StorageError::Unexpected)
+        }
+    }
+}
+
+fn extract_xml_text(xml: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = xml.find(&open)? + open.len();
+    let end = xml[start..].find(&close)? + start;
+    Some(xml[start..end].to_string())
+}
+
+fn complete_multipart_xml(parts: &[CompletedUploadPart]) -> String {
+    let mut xml = String::from("<CompleteMultipartUpload>");
+    for part in parts {
+        xml.push_str("<Part>");
+        xml.push_str(&format!("<PartNumber>{}</PartNumber>", part.part_number));
+        xml.push_str("<ETag>");
+        xml.push_str(&escape_xml(&part.etag));
+        xml.push_str("</ETag>");
+        xml.push_str("</Part>");
+    }
+    xml.push_str("</CompleteMultipartUpload>");
+    xml
+}
+
+fn escape_xml(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 impl S3UrlStyle {

@@ -81,16 +81,33 @@ Rules:
 
 Upload and download keep the public contract in `contracts/files.md`:
 
+Direct upload compatibility flow:
+
 1. `POST /files/uploads` authenticates the session, validates metadata, checks quota, signs a PUT URL, and stores a pending file row.
 2. The browser uploads one full object directly to S3-compatible object storage.
 3. `POST /files/{file_id}/complete` checks ownership, verifies object length with storage, marks the row complete, and increments storage usage once.
 4. `GET /drive` lists active child folders and completed files in a root or folder location.
 5. `GET /files/{file_id}/download` checks ownership and returns a short-lived signed GET URL.
 
-Multipart/resumable upload sessions are intentionally outside the current file
-flow. The next upload milestone adds session state, part tracking, status lookup,
-finalization, expiration, and object cleanup without changing the owner-only
-completion rule for visible files.
+Resumable multipart flow:
+
+1. `POST /files/uploads/resumable` validates metadata, checks quota, starts an
+   object-storage multipart upload, and stores a pending `files` row with
+   multipart metadata.
+2. `GET /files/uploads/{file_id}/status` returns confirmed `upload_parts` so a
+   client can continue from server state.
+3. `POST /files/uploads/{file_id}/parts` signs one object-storage part upload.
+4. The browser uploads that byte range directly to S3-compatible object storage
+   and receives the part `ETag`.
+5. `POST /files/uploads/{file_id}/parts/{part_number}` records the confirmed
+   part size and ETag.
+6. `POST /files/uploads/{file_id}/finalize` verifies a complete ordered part set,
+   completes the multipart upload in object storage, HEADs the final object,
+   marks the file complete, and increments storage usage once.
+7. `POST /files/uploads/cleanup-expired` marks stale pending resumable uploads
+   expired and aborts their multipart uploads.
+
+Only completed files become visible in drive browse/search/share/download flows.
 
 ## Folder Tree Flow
 

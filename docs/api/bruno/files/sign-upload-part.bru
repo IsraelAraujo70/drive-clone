@@ -1,0 +1,38 @@
+meta {
+  name: Sign Upload Part
+  type: http
+  seq: 6
+}
+post {
+  url: {{baseUrl}}/files/uploads/{{fileId}}/parts
+  body: json
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "part_number": "{{partNumber}}"
+  }
+}
+
+tests {
+  if (res.body && res.body.upload_url) {
+    bru.setVar('partUploadUrl', res.body.upload_url);
+  }
+
+  test("response status is documented", function() {
+    expect([200, 401, 404, 409, 422, 502]).to.include(res.status);
+  });
+}
+
+docs {
+  Signs one object-storage multipart PUT URL. Upload exactly expected_size_bytes to the returned URL, then record the ETag.
+}

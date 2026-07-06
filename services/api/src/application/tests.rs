@@ -12,25 +12,29 @@ use crate::application::auth::logout::LogoutUseCase;
 use crate::application::auth::signup::{SignupInput, SignupUseCase};
 use crate::application::files::{
     BrowseFolderUseCase, CompleteUploadUseCase, CreateFolderInput, CreateFolderUseCase,
-    CreateUploadUseCase, DeleteFileUseCase, DeleteFolderUseCase, DownloadFileUseCase,
+    CreateResumableUploadUseCase, CreateUploadUseCase, DeleteFileUseCase, DeleteFolderUseCase,
+    DownloadFileUseCase, FinalizeResumableUploadUseCase, GetUploadStatusUseCase,
     ListDriveTrashUseCase, ListFilesUseCase, ListFoldersUseCase, ListSharedWithMeUseCase,
-    ListSharesUseCase, ListTrashUseCase, RestoreFileUseCase, RestoreFolderUseCase,
-    RevokeShareUseCase, SearchFilesInput, SearchFilesUseCase, ShareFileInput, ShareFileUseCase,
-    UpdateFileInput, UpdateFileUseCase, UpdateFolderInput, UpdateFolderUseCase,
+    ListSharesUseCase, ListTrashUseCase, MIN_RESUMABLE_PART_SIZE_BYTES, PresignUploadPartInput,
+    PresignUploadPartUseCase, RecordUploadPartInput, RecordUploadPartUseCase, RestoreFileUseCase,
+    RestoreFolderUseCase, RevokeShareUseCase, SearchFilesInput, SearchFilesUseCase, ShareFileInput,
+    ShareFileUseCase, UpdateFileInput, UpdateFileUseCase, UpdateFolderInput, UpdateFolderUseCase,
 };
 use crate::application::ports::RepositoryError;
 use crate::application::ports::auth::{AuthRepository, CreateUserRecord};
 use crate::application::ports::clock::{Clock, FixedClock};
 use crate::application::ports::files::{
-    CreateFolderRecord, CreatePendingFileRecord, FileRepository, SearchFilesRecord,
-    UpdateFileRecord, UpdateFolderRecord,
+    CreateFolderRecord, CreatePendingFileRecord, CreateResumableUploadRecord, ExpiredUploadRecord,
+    FileRepository, RecordUploadPartRecord, SearchFilesRecord, UpdateFileRecord,
+    UpdateFolderRecord,
 };
 use crate::application::ports::id_generator::SequenceIdGenerator;
 use crate::domain::auth::{User, UserWithPassword, hash_password, hash_token};
 use crate::domain::error::DomainError;
 use crate::domain::files::{
-    DriveBrowse, DriveFile, FileShare, FileState, FileUser, Folder, PendingFile, SearchAccess,
-    SearchFileResult, SharedFile, UploadRequest,
+    DriveBrowse, DriveFile, FileShare, FileState, FileUser, Folder, PendingFile,
+    ResumableUploadRequest, ResumableUploadSession, SearchAccess, SearchFileResult, SharedFile,
+    UploadPart, UploadRequest,
 };
 
 fn fixed_now() -> DateTime<Utc> {
@@ -175,6 +179,8 @@ struct FakeFileRepository {
     pending: Mutex<HashMap<Uuid, PendingFile>>,
     pending_owners: Mutex<HashMap<Uuid, Uuid>>,
     pending_parents: Mutex<HashMap<Uuid, Option<Uuid>>>,
+    resumable: Mutex<HashMap<Uuid, ResumableUploadSession>>,
+    upload_parts: Mutex<HashMap<(Uuid, i32), UploadPart>>,
     completed: Mutex<HashMap<Uuid, DriveFile>>,
     owners: Mutex<HashMap<Uuid, Uuid>>,
     folders: Mutex<HashMap<Uuid, Folder>>,
@@ -277,6 +283,144 @@ impl FileRepository for FakeFileRepository {
             .unwrap()
             .insert(id, input.parent_folder_id);
         Ok(file)
+    }
+
+    async fn create_resumable_upload(
+        &self,
+        input: CreateResumableUploadRecord,
+    ) -> Result<ResumableUploadSession, RepositoryError> {
+        if !self.active_parent_belongs_to(input.owner_id, input.parent_folder_id) {
+            return Err(RepositoryError::NotFound);
+        }
+        let id = Uuid::parse_str("33333333-3333-4333-8333-333333333333").unwrap();
+        let session = ResumableUploadSession {
+            file_id: id,
+            owner_id: input.owner_id,
+            filename: input.filename,
+            parent_folder_id: input.parent_folder_id,
+            content_type: input.content_type,
+            size_bytes: input.size_bytes,
+            checksum_sha256: input.checksum_sha256,
+            object_key: input.object_key,
+            multipart_upload_id: input.multipart_upload_id,
+            part_size_bytes: input.part_size_bytes,
+            state: FileState::Pending,
+            upload_expires_at: input.upload_expires_at,
+            created_at: fixed_now(),
+            updated_at: fixed_now(),
+            completed_at: None,
+            parts: Vec::new(),
+        };
+        self.resumable.lock().unwrap().insert(id, session.clone());
+        Ok(session)
+    }
+
+    async fn find_resumable_upload(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+    ) -> Result<Option<ResumableUploadSession>, RepositoryError> {
+        let Some(mut session) = self.resumable.lock().unwrap().get(&file_id).cloned() else {
+            return Ok(None);
+        };
+        if session.owner_id != owner_id {
+            return Ok(None);
+        }
+        let mut parts = self
+            .upload_parts
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|((part_file_id, _), part)| {
+                (*part_file_id == file_id).then_some(part.clone())
+            })
+            .collect::<Vec<_>>();
+        parts.sort_by_key(|part| part.part_number);
+        session.parts = parts;
+        Ok(Some(session))
+    }
+
+    async fn record_upload_part(
+        &self,
+        input: RecordUploadPartRecord,
+    ) -> Result<UploadPart, RepositoryError> {
+        let session = self
+            .resumable
+            .lock()
+            .unwrap()
+            .get(&input.file_id)
+            .cloned()
+            .ok_or(RepositoryError::NotFound)?;
+        if session.owner_id != input.owner_id || session.state != FileState::Pending {
+            return Err(RepositoryError::InvalidState);
+        }
+        let part = UploadPart {
+            part_number: input.part_number,
+            size_bytes: input.size_bytes,
+            etag: input.etag,
+        };
+        self.upload_parts
+            .lock()
+            .unwrap()
+            .insert((input.file_id, input.part_number), part.clone());
+        Ok(part)
+    }
+
+    async fn complete_resumable_upload_once(
+        &self,
+        owner_id: Uuid,
+        file_id: Uuid,
+        expected_size: i64,
+    ) -> Result<DriveFile, RepositoryError> {
+        let mut resumable = self.resumable.lock().unwrap();
+        let session = resumable
+            .get_mut(&file_id)
+            .filter(|session| session.owner_id == owner_id)
+            .ok_or(RepositoryError::NotFound)?;
+        if session.state != FileState::Pending || session.size_bytes != expected_size {
+            return Err(RepositoryError::InvalidState);
+        }
+        session.state = FileState::Complete;
+        session.completed_at = Some(fixed_now());
+        let file = DriveFile {
+            id: file_id,
+            filename: session.filename.clone(),
+            parent_folder_id: session.parent_folder_id,
+            content_type: session.content_type.clone(),
+            size_bytes: session.size_bytes,
+            checksum_sha256: session.checksum_sha256.clone(),
+            object_key: session.object_key.clone(),
+            state: FileState::Complete,
+            created_at: session.created_at,
+            updated_at: fixed_now(),
+            completed_at: Some(fixed_now()),
+            deleted_at: None,
+        };
+        self.owners.lock().unwrap().insert(file_id, owner_id);
+        self.completed.lock().unwrap().insert(file_id, file.clone());
+        Ok(file)
+    }
+
+    async fn expire_resumable_uploads(
+        &self,
+        now: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<ExpiredUploadRecord>, RepositoryError> {
+        let mut expired = Vec::new();
+        for session in self.resumable.lock().unwrap().values_mut() {
+            if expired.len() >= limit as usize {
+                break;
+            }
+            if session.state == FileState::Pending && session.upload_expires_at < now {
+                session.state = FileState::Expired;
+                expired.push(ExpiredUploadRecord {
+                    file_id: session.file_id,
+                    object_key: session.object_key.clone(),
+                    multipart_upload_id: session.multipart_upload_id.clone(),
+                });
+            }
+        }
+        Ok(expired)
     }
 
     async fn create_folder(&self, input: CreateFolderRecord) -> Result<Folder, RepositoryError> {
@@ -1047,6 +1191,194 @@ async fn complete_upload_checks_storage_length_and_completes_once() {
     let completed = use_case.execute(&owner, file_id).await.unwrap();
     assert_eq!(completed.state, FileState::Complete);
     assert_eq!(*repo.completed_count.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn resumable_upload_records_parts_and_finalizes_complete_object() {
+    let repo = Arc::new(FakeFileRepository::default());
+    let storage = Arc::new(FakeObjectStorage::default());
+    let ids = Arc::new(SequenceIdGenerator::new([Uuid::parse_str(
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    )
+    .unwrap()]));
+    let clock = Arc::new(FixedClock::new(fixed_now()));
+    let part_size = MIN_RESUMABLE_PART_SIZE_BYTES;
+    let total_size = part_size * 2 + 2;
+    let owner = user(Uuid::new_v4(), "resumable@example.com", 0, total_size);
+
+    let create = CreateResumableUploadUseCase::new(
+        repo.clone(),
+        storage.clone(),
+        ids,
+        clock.clone(),
+        total_size,
+        900,
+    );
+    let created = create
+        .execute(
+            &owner,
+            ResumableUploadRequest {
+                filename: "video.txt".to_string(),
+                parent_folder_id: None,
+                content_type: "text/plain".to_string(),
+                size_bytes: total_size,
+                checksum_sha256: None,
+                part_size_bytes: Some(part_size),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.part_size_bytes, part_size);
+
+    let presign = PresignUploadPartUseCase::new(repo.clone(), storage.clone(), clock.clone(), 900);
+    let first_part = presign
+        .execute(
+            &owner,
+            PresignUploadPartInput {
+                file_id: created.file_id,
+                part_number: 1,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_part.expected_size_bytes, part_size);
+    assert!(first_part.upload_url.contains("partNumber=1"));
+
+    let record = RecordUploadPartUseCase::new(repo.clone(), clock.clone());
+    record
+        .execute(
+            &owner,
+            RecordUploadPartInput {
+                file_id: created.file_id,
+                part_number: 1,
+                size_bytes: part_size,
+                etag: "\"etag-1\"".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+    record
+        .execute(
+            &owner,
+            RecordUploadPartInput {
+                file_id: created.file_id,
+                part_number: 2,
+                size_bytes: part_size,
+                etag: "\"etag-2\"".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+    record
+        .execute(
+            &owner,
+            RecordUploadPartInput {
+                file_id: created.file_id,
+                part_number: 3,
+                size_bytes: 2,
+                etag: "\"etag-3\"".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let status = GetUploadStatusUseCase::new(repo.clone())
+        .execute(&owner, created.file_id)
+        .await
+        .unwrap();
+    assert_eq!(status.parts.len(), 3);
+
+    storage.put_object(&created.object_key, total_size);
+    let finalize = FinalizeResumableUploadUseCase::new(repo.clone(), storage.clone(), clock);
+    let file = finalize.execute(&owner, created.file_id).await.unwrap();
+    assert_eq!(file.state, FileState::Complete);
+    assert_eq!(
+        storage.multipart_completions()[0].2,
+        vec![
+            crate::application::ports::object_storage::CompletedUploadPart {
+                part_number: 1,
+                etag: "\"etag-1\"".to_string(),
+            },
+            crate::application::ports::object_storage::CompletedUploadPart {
+                part_number: 2,
+                etag: "\"etag-2\"".to_string(),
+            },
+            crate::application::ports::object_storage::CompletedUploadPart {
+                part_number: 3,
+                etag: "\"etag-3\"".to_string(),
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn resumable_upload_rejects_missing_or_wrong_sized_parts() {
+    let repo = Arc::new(FakeFileRepository::default());
+    let storage = Arc::new(FakeObjectStorage::default());
+    let ids = Arc::new(SequenceIdGenerator::new([Uuid::new_v4()]));
+    let clock = Arc::new(FixedClock::new(fixed_now()));
+    let part_size = MIN_RESUMABLE_PART_SIZE_BYTES;
+    let total_size = part_size * 2 + 2;
+    let owner = user(Uuid::new_v4(), "parts@example.com", 0, total_size);
+    let created = CreateResumableUploadUseCase::new(
+        repo.clone(),
+        storage.clone(),
+        ids,
+        clock.clone(),
+        total_size,
+        900,
+    )
+    .execute(
+        &owner,
+        ResumableUploadRequest {
+            filename: "video.txt".to_string(),
+            parent_folder_id: None,
+            content_type: "text/plain".to_string(),
+            size_bytes: total_size,
+            checksum_sha256: None,
+            part_size_bytes: Some(part_size),
+        },
+    )
+    .await
+    .unwrap();
+
+    let record = RecordUploadPartUseCase::new(repo.clone(), clock.clone());
+    assert_eq!(
+        record
+            .execute(
+                &owner,
+                RecordUploadPartInput {
+                    file_id: created.file_id,
+                    part_number: 2,
+                    size_bytes: part_size - 1,
+                    etag: "\"wrong\"".to_string(),
+                },
+            )
+            .await
+            .unwrap_err(),
+        AppError::Domain(DomainError::InvalidFileState)
+    );
+
+    record
+        .execute(
+            &owner,
+            RecordUploadPartInput {
+                file_id: created.file_id,
+                part_number: 1,
+                size_bytes: part_size,
+                etag: "\"etag-1\"".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+    storage.put_object(&created.object_key, total_size);
+    assert_eq!(
+        FinalizeResumableUploadUseCase::new(repo, storage, clock)
+            .execute(&owner, created.file_id)
+            .await
+            .unwrap_err(),
+        AppError::Domain(DomainError::InvalidFileState)
+    );
 }
 
 #[tokio::test]

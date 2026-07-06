@@ -13,6 +13,7 @@ pub mod list_shares;
 pub mod list_trash;
 pub mod restore_file;
 pub mod restore_folder;
+pub mod resumable_upload;
 pub mod revoke_share;
 pub mod search_files;
 pub mod share_file;
@@ -34,6 +35,12 @@ pub use list_shares::ListSharesUseCase;
 pub use list_trash::ListTrashUseCase;
 pub use restore_file::RestoreFileUseCase;
 pub use restore_folder::RestoreFolderUseCase;
+pub use resumable_upload::{
+    CreateResumableUploadOutput, CreateResumableUploadUseCase, ExpireResumableUploadsUseCase,
+    ExpireUploadsOutput, FinalizeResumableUploadUseCase, GetUploadStatusUseCase,
+    MIN_RESUMABLE_PART_SIZE_BYTES, PresignUploadPartInput, PresignUploadPartOutput,
+    PresignUploadPartUseCase, RecordUploadPartInput, RecordUploadPartUseCase,
+};
 pub use revoke_share::RevokeShareUseCase;
 pub use search_files::{SearchFilesInput, SearchFilesUseCase};
 pub use share_file::{ShareFileInput, ShareFileUseCase};

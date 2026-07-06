@@ -1,10 +1,10 @@
 meta {
-  name: Restore File
+  name: Get Upload Status
   type: http
-  seq: 15
+  seq: 5
 }
-post {
-  url: {{baseUrl}}/files/{{fileId}}/restore
+get {
+  url: {{baseUrl}}/files/uploads/{{fileId}}/status
   body: none
   auth: bearer
 }
@@ -23,5 +23,5 @@ tests {
 }
 
 docs {
-  Owner-only restore for a file directly deleted by the owner. Clears deleted_at when the parent folder is active.
+  Returns resumable upload state and confirmed parts so clients can resume from server state.
 }

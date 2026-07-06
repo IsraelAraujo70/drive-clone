@@ -42,6 +42,19 @@ bash docs/evals/minio-upload-smoke.sh
 
 The script signs up a user, creates a direct upload, PUTs bytes to MinIO, completes the file, verifies listing, requests a download URL, and byte-compares the downloaded object.
 
+## Resumable Upload Smoke
+
+Run after the API is serving against docker-compose Postgres and MinIO:
+
+```bash
+bash docs/evals/resumable-upload-smoke.sh
+```
+
+The script signs up a user, creates a resumable multipart upload, uploads the
+first part, verifies the status endpoint reports that confirmed part, uploads the
+remaining part, finalizes the multipart object, requests a download URL, and
+byte-compares the downloaded object.
+
 ## Share + Soft Delete Smoke
 
 Runs against any live API (local stack or production):

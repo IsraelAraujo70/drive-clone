@@ -1054,6 +1054,101 @@ async fn complete_upload_tracks_storage_once_and_lists_completed_files(pool: PgP
 }
 
 #[sqlx::test]
+async fn resumable_upload_status_parts_and_finalize_follow_contract(pool: PgPool) {
+    let storage = Arc::new(FakeObjectStorage::default());
+    let app = app_with_storage(pool.clone(), storage.clone());
+    let token = signup(app.clone(), "resumable-owner@example.com").await;
+    let part_size = 5 * 1024 * 1024;
+    let total_size = part_size * 2 + 2;
+
+    let (status, upload) = request(
+        app.clone(),
+        "POST",
+        "/files/uploads/resumable",
+        Some(&token),
+        Some(json!({
+            "filename": "movie.bin",
+            "content_type": "application/octet-stream",
+            "size_bytes": total_size,
+            "checksum_sha256": null,
+            "part_size_bytes": part_size
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let file_id = upload["file_id"].as_str().unwrap();
+    let object_key = upload["object_key"].as_str().unwrap();
+    assert_eq!(upload["part_size_bytes"], part_size);
+
+    let (status, signed) = request(
+        app.clone(),
+        "POST",
+        &format!("/files/uploads/{file_id}/parts"),
+        Some(&token),
+        Some(json!({"part_number": 1})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(signed["expected_size_bytes"], part_size);
+    assert!(
+        signed["upload_url"]
+            .as_str()
+            .unwrap()
+            .contains("partNumber=1")
+    );
+
+    for (part_number, size_bytes) in [(1, part_size), (2, part_size), (3, 2)] {
+        let (status, part) = request(
+            app.clone(),
+            "POST",
+            &format!("/files/uploads/{file_id}/parts/{part_number}"),
+            Some(&token),
+            Some(json!({"size_bytes": size_bytes, "etag": format!("\"etag-{part_number}\"")})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(part["part_number"], part_number);
+        assert_eq!(part["size_bytes"], size_bytes);
+    }
+
+    let (status, status_body) = request(
+        app.clone(),
+        "GET",
+        &format!("/files/uploads/{file_id}/status"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status_body["state"], "pending");
+    assert_eq!(status_body["parts"].as_array().unwrap().len(), 3);
+
+    storage.put_object(object_key, total_size);
+    let (status, completed) = request(
+        app.clone(),
+        "POST",
+        &format!("/files/uploads/{file_id}/finalize"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(completed["state"], "complete");
+
+    let used: i64 = sqlx::query_scalar("SELECT storage_used_bytes FROM users WHERE email = $1")
+        .bind("resumable-owner@example.com")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(used, total_size);
+
+    let (status, body) = request(app, "GET", "/files", Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["files"].as_array().unwrap().len(), 1);
+    assert_eq!(body["files"][0]["id"], file_id);
+}
+
+#[sqlx::test]
 async fn private_files_do_not_leak_to_other_users(pool: PgPool) {
     let storage = Arc::new(FakeObjectStorage::default());
     let app = app_with_storage(pool, storage.clone());

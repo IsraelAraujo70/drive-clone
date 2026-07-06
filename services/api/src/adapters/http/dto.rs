@@ -7,12 +7,14 @@ use crate::application::auth::signup::AuthResponse as UseCaseAuthResponse;
 use crate::application::files::{
     CreateFolderInput, CreateResumableUploadOutput, CreateUploadOutput, DownloadFileOutput,
     ExpireUploadsOutput, PresignUploadPartInput, PresignUploadPartOutput, RecordUploadPartInput,
-    SearchFilesInput, ShareFileInput, UpdateFileInput, UpdateFolderInput,
+    SearchFilesInput, ShareFileInput, SyncChangesInput, SyncChangesOutput, UpdateFileInput,
+    UpdateFolderInput,
 };
 use crate::domain::auth::User;
 use crate::domain::files::{
-    DriveBrowse, DriveFile, FileShare, FileUser, Folder, FolderPathEntry, ResumableUploadRequest,
-    ResumableUploadSession, SearchFileResult, SharedFile, UploadPart, UploadRequest,
+    ChangeLogEntry, DriveBrowse, DriveFile, FileShare, FileUser, Folder, FolderPathEntry,
+    ResumableUploadRequest, ResumableUploadSession, SearchFileResult, SharedFile, UploadPart,
+    UploadRequest,
 };
 
 #[derive(Deserialize)]
@@ -571,6 +573,109 @@ impl From<SearchFileResult> for SearchFileResultResponse {
             access: result.access.as_str().to_string(),
             file: result.file.into(),
             owner: result.owner.map(Into::into),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SyncChangesQuery {
+    pub cursor: Option<i64>,
+    pub limit: Option<i64>,
+}
+
+impl From<SyncChangesQuery> for SyncChangesInput {
+    fn from(query: SyncChangesQuery) -> Self {
+        Self {
+            cursor: query.cursor,
+            limit: query.limit,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ChangeFileSnapshot {
+    id: Uuid,
+    filename: String,
+    parent_folder_id: Option<Uuid>,
+    size_bytes: i64,
+    content_type: String,
+    checksum_sha256: Option<String>,
+    updated_at: DateTime<Utc>,
+}
+
+impl From<DriveFile> for ChangeFileSnapshot {
+    fn from(file: DriveFile) -> Self {
+        Self {
+            id: file.id,
+            filename: file.filename,
+            parent_folder_id: file.parent_folder_id,
+            size_bytes: file.size_bytes,
+            content_type: file.content_type,
+            checksum_sha256: file.checksum_sha256,
+            updated_at: file.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ChangeFolderSnapshot {
+    id: Uuid,
+    name: String,
+    parent_folder_id: Option<Uuid>,
+    updated_at: DateTime<Utc>,
+}
+
+impl From<Folder> for ChangeFolderSnapshot {
+    fn from(folder: Folder) -> Self {
+        Self {
+            id: folder.id,
+            name: folder.name,
+            parent_folder_id: folder.parent_folder_id,
+            updated_at: folder.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ChangeEntryResponse {
+    seq: i64,
+    entity_type: String,
+    op: String,
+    entity_id: Uuid,
+    occurred_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file: Option<ChangeFileSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    folder: Option<ChangeFolderSnapshot>,
+}
+
+impl From<ChangeLogEntry> for ChangeEntryResponse {
+    fn from(entry: ChangeLogEntry) -> Self {
+        Self {
+            seq: entry.seq,
+            entity_type: entry.entity_type.as_str().to_string(),
+            op: entry.op.as_str().to_string(),
+            entity_id: entry.entity_id,
+            occurred_at: entry.occurred_at,
+            file: entry.file.map(Into::into),
+            folder: entry.folder.map(Into::into),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct SyncChangesResponse {
+    changes: Vec<ChangeEntryResponse>,
+    next_cursor: i64,
+    has_more: bool,
+}
+
+impl From<SyncChangesOutput> for SyncChangesResponse {
+    fn from(output: SyncChangesOutput) -> Self {
+        Self {
+            changes: output.changes.into_iter().map(Into::into).collect(),
+            next_cursor: output.next_cursor,
+            has_more: output.has_more,
         }
     }
 }

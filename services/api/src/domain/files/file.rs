@@ -144,3 +144,65 @@ pub struct SearchFileResult {
     pub access: SearchAccess,
     pub owner: Option<FileUser>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeEntityType {
+    File,
+    Folder,
+}
+
+impl ChangeEntityType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Folder => "folder",
+        }
+    }
+}
+
+impl From<String> for ChangeEntityType {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "folder" => Self::Folder,
+            _ => Self::File,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeOp {
+    Upsert,
+    Delete,
+}
+
+impl ChangeOp {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Upsert => "upsert",
+            Self::Delete => "delete",
+        }
+    }
+}
+
+impl From<String> for ChangeOp {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "delete" => Self::Delete,
+            _ => Self::Upsert,
+        }
+    }
+}
+
+/// A single entry in the per-owner change feed. `file`/`folder` carry the
+/// entity snapshot for `upsert` operations; both are `None` for tombstones
+/// (`delete`), where only `entity_id` identifies the removed item.
+#[derive(Debug, Clone)]
+pub struct ChangeLogEntry {
+    pub seq: i64,
+    pub entity_type: ChangeEntityType,
+    pub entity_id: Uuid,
+    pub op: ChangeOp,
+    pub occurred_at: DateTime<Utc>,
+    pub file: Option<DriveFile>,
+    pub folder: Option<Folder>,
+}

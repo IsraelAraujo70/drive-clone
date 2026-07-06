@@ -11,8 +11,9 @@ use crate::application::ports::files::{
     UpdateFolderRecord,
 };
 use crate::domain::files::{
-    DriveBrowse, DriveFile, FileShare, FileState, FileUser, Folder, FolderPathEntry, PendingFile,
-    ResumableUploadSession, SearchAccess, SearchFileResult, SharedFile, UploadPart,
+    ChangeEntityType, ChangeLogEntry, ChangeOp, DriveBrowse, DriveFile, FileShare, FileState,
+    FileUser, Folder, FolderPathEntry, PendingFile, ResumableUploadSession, SearchAccess,
+    SearchFileResult, SharedFile, UploadPart,
 };
 
 #[derive(Debug, Clone)]
@@ -106,6 +107,41 @@ impl PostgresFileRepository {
                 name: row.name,
             })
             .collect())
+    }
+
+    /// Records a change-feed entry inside an existing transaction. Bumps the
+    /// owner's `change_seq` under a row lock (serializing the owner's writes so
+    /// visibility order matches seq order) and inserts the tombstone/upsert
+    /// marker. Must run in the same transaction as the mutation it describes.
+    async fn record_change(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        owner_id: Uuid,
+        entity_type: &str,
+        entity_id: Uuid,
+        op: &str,
+    ) -> Result<i64, RepositoryError> {
+        let seq: i64 = sqlx::query_scalar(
+            "UPDATE users SET change_seq = change_seq + 1 WHERE id = $1 RETURNING change_seq",
+        )
+        .bind(owner_id)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        sqlx::query(
+            "INSERT INTO change_log (owner_id, seq, entity_type, entity_id, op)
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(owner_id)
+        .bind(seq)
+        .bind(entity_type)
+        .bind(entity_id)
+        .bind(op)
+        .execute(&mut **tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        Ok(seq)
     }
 }
 
@@ -222,7 +258,7 @@ impl From<DriveFileRow> for DriveFile {
     }
 }
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 struct FolderRow {
     id: Uuid,
     name: String,
@@ -372,6 +408,100 @@ impl From<SearchFileRow> for SearchFileResult {
             },
             access,
             owner,
+        }
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct ChangeLogRow {
+    seq: i64,
+    entity_type: String,
+    entity_id: Uuid,
+    op: String,
+    occurred_at: DateTime<Utc>,
+    file_id: Option<Uuid>,
+    file_filename: Option<String>,
+    file_parent_folder_id: Option<Uuid>,
+    file_content_type: Option<String>,
+    file_size_bytes: Option<i64>,
+    file_checksum_sha256: Option<String>,
+    file_object_key: Option<String>,
+    file_state: Option<String>,
+    file_created_at: Option<DateTime<Utc>>,
+    file_updated_at: Option<DateTime<Utc>>,
+    file_completed_at: Option<DateTime<Utc>>,
+    file_deleted_at: Option<DateTime<Utc>>,
+    folder_id: Option<Uuid>,
+    folder_name: Option<String>,
+    folder_parent_folder_id: Option<Uuid>,
+    folder_created_at: Option<DateTime<Utc>>,
+    folder_updated_at: Option<DateTime<Utc>>,
+    folder_deleted_at: Option<DateTime<Utc>>,
+}
+
+impl From<ChangeLogRow> for ChangeLogEntry {
+    fn from(row: ChangeLogRow) -> Self {
+        let file = match (
+            row.file_id,
+            row.file_filename,
+            row.file_content_type,
+            row.file_size_bytes,
+            row.file_object_key,
+            row.file_state,
+            row.file_created_at,
+            row.file_updated_at,
+        ) {
+            (
+                Some(id),
+                Some(filename),
+                Some(content_type),
+                Some(size_bytes),
+                Some(object_key),
+                Some(state),
+                Some(created_at),
+                Some(updated_at),
+            ) => Some(DriveFile {
+                id,
+                filename,
+                parent_folder_id: row.file_parent_folder_id,
+                content_type,
+                size_bytes,
+                checksum_sha256: row.file_checksum_sha256,
+                object_key,
+                state: state.into(),
+                created_at,
+                updated_at,
+                completed_at: row.file_completed_at,
+                deleted_at: row.file_deleted_at,
+            }),
+            _ => None,
+        };
+
+        let folder = match (
+            row.folder_id,
+            row.folder_name,
+            row.folder_created_at,
+            row.folder_updated_at,
+        ) {
+            (Some(id), Some(name), Some(created_at), Some(updated_at)) => Some(Folder {
+                id,
+                name,
+                parent_folder_id: row.folder_parent_folder_id,
+                created_at,
+                updated_at,
+                deleted_at: row.folder_deleted_at,
+            }),
+            _ => None,
+        };
+
+        Self {
+            seq: row.seq,
+            entity_type: ChangeEntityType::from(row.entity_type),
+            entity_id: row.entity_id,
+            op: ChangeOp::from(row.op),
+            occurred_at: row.occurred_at,
+            file,
+            folder,
         }
     }
 }
@@ -591,6 +721,8 @@ impl FileRepository for PostgresFileRepository {
         .await
         .map_err(map_sqlx_error)?;
 
+        Self::record_change(&mut tx, owner_id, "file", file_id, "upsert").await?;
+
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(updated.into())
     }
@@ -648,6 +780,8 @@ impl FileRepository for PostgresFileRepository {
         .fetch_one(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
+
+        Self::record_change(&mut tx, input.owner_id, "folder", folder.id, "upsert").await?;
 
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(folder.into())
@@ -775,6 +909,8 @@ impl FileRepository for PostgresFileRepository {
         .await
         .map_err(map_sqlx_error)?;
 
+        Self::record_change(&mut tx, owner_id, "file", file_id, "upsert").await?;
+
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(updated.into())
     }
@@ -861,6 +997,8 @@ impl FileRepository for PostgresFileRepository {
         .map_err(map_sqlx_error)?
         .ok_or(RepositoryError::NotFound)?;
 
+        Self::record_change(&mut tx, input.owner_id, "file", file.id, "upsert").await?;
+
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(file.into())
     }
@@ -939,6 +1077,8 @@ impl FileRepository for PostgresFileRepository {
         .map_err(map_sqlx_error)?
         .ok_or(RepositoryError::NotFound)?;
 
+        Self::record_change(&mut tx, input.owner_id, "folder", folder.id, "upsert").await?;
+
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(folder.into())
     }
@@ -975,6 +1115,7 @@ impl FileRepository for PostgresFileRepository {
         owner_id: Uuid,
         file_id: Uuid,
     ) -> Result<(), RepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         let result = sqlx::query(
             "UPDATE files
              SET deleted_at = now(), deleted_by_folder_id = NULL, updated_at = now()
@@ -982,15 +1123,18 @@ impl FileRepository for PostgresFileRepository {
         )
         .bind(file_id)
         .bind(owner_id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
 
         if result.rows_affected() == 0 {
-            Err(RepositoryError::NotFound)
-        } else {
-            Ok(())
+            return Err(RepositoryError::NotFound);
         }
+
+        Self::record_change(&mut tx, owner_id, "file", file_id, "delete").await?;
+
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(())
     }
 
     async fn restore_owned_file(
@@ -998,7 +1142,8 @@ impl FileRepository for PostgresFileRepository {
         owner_id: Uuid,
         file_id: Uuid,
     ) -> Result<DriveFile, RepositoryError> {
-        sqlx::query_as::<_, DriveFileRow>(
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let file: DriveFile = sqlx::query_as::<_, DriveFileRow>(
             "UPDATE files
              SET deleted_at = NULL, updated_at = now()
              WHERE id = $1
@@ -1018,11 +1163,16 @@ impl FileRepository for PostgresFileRepository {
         )
         .bind(file_id)
         .bind(owner_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
-        .map(|row| row.map(Into::into))
         .map_err(map_sqlx_error)?
-        .ok_or(RepositoryError::NotFound)
+        .map(Into::into)
+        .ok_or(RepositoryError::NotFound)?;
+
+        Self::record_change(&mut tx, owner_id, "file", file_id, "upsert").await?;
+
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(file)
     }
 
     async fn list_trash(&self, owner_id: Uuid) -> Result<Vec<DriveFile>, RepositoryError> {
@@ -1060,7 +1210,7 @@ impl FileRepository for PostgresFileRepository {
             return Err(RepositoryError::NotFound);
         }
 
-        sqlx::query(
+        let deleted_folders: Vec<(Uuid,)> = sqlx::query_as(
             "WITH RECURSIVE descendants AS (
                 SELECT id FROM folders
                 WHERE id = $1 AND owner_id = $2 AND deleted_at IS NULL
@@ -1076,15 +1226,16 @@ impl FileRepository for PostgresFileRepository {
                  updated_at = now()
              WHERE owner_id = $2
                AND deleted_at IS NULL
-               AND id IN (SELECT id FROM descendants)",
+               AND id IN (SELECT id FROM descendants)
+             RETURNING id",
         )
         .bind(folder_id)
         .bind(owner_id)
-        .execute(&mut *tx)
+        .fetch_all(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
 
-        sqlx::query(
+        let deleted_files: Vec<(Uuid,)> = sqlx::query_as(
             "WITH RECURSIVE descendants AS (
                 SELECT id FROM folders
                 WHERE id = $1 AND owner_id = $2
@@ -1100,13 +1251,21 @@ impl FileRepository for PostgresFileRepository {
              WHERE owner_id = $2
                AND state = 'complete'
                AND deleted_at IS NULL
-               AND parent_folder_id IN (SELECT id FROM descendants)",
+               AND parent_folder_id IN (SELECT id FROM descendants)
+             RETURNING id",
         )
         .bind(folder_id)
         .bind(owner_id)
-        .execute(&mut *tx)
+        .fetch_all(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
+
+        for (folder_node_id,) in deleted_folders {
+            Self::record_change(&mut tx, owner_id, "folder", folder_node_id, "delete").await?;
+        }
+        for (file_node_id,) in deleted_files {
+            Self::record_change(&mut tx, owner_id, "file", file_node_id, "delete").await?;
+        }
 
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(())
@@ -1145,21 +1304,22 @@ impl FileRepository for PostgresFileRepository {
             return Err(RepositoryError::InvalidState);
         }
 
-        sqlx::query(
+        let restored_files: Vec<(Uuid,)> = sqlx::query_as(
             "UPDATE files
              SET deleted_at = NULL,
                  deleted_by_folder_id = NULL,
                  updated_at = now()
              WHERE owner_id = $1
-               AND deleted_by_folder_id = $2",
+               AND deleted_by_folder_id = $2
+             RETURNING id",
         )
         .bind(owner_id)
         .bind(folder_id)
-        .execute(&mut *tx)
+        .fetch_all(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
 
-        let folder = sqlx::query_as::<_, FolderRow>(
+        let restored_folders = sqlx::query_as::<_, FolderRow>(
             "UPDATE folders
              SET deleted_at = NULL,
                  deleted_by_folder_id = NULL,
@@ -1172,10 +1332,20 @@ impl FileRepository for PostgresFileRepository {
         .bind(folder_id)
         .fetch_all(&mut *tx)
         .await
-        .map_err(map_sqlx_error)?
-        .into_iter()
-        .find(|folder| folder.id == folder_id)
-        .ok_or(RepositoryError::NotFound)?;
+        .map_err(map_sqlx_error)?;
+
+        let folder = restored_folders
+            .iter()
+            .find(|folder| folder.id == folder_id)
+            .cloned()
+            .ok_or(RepositoryError::NotFound)?;
+
+        for folder_node in &restored_folders {
+            Self::record_change(&mut tx, owner_id, "folder", folder_node.id, "upsert").await?;
+        }
+        for (file_node_id,) in restored_files {
+            Self::record_change(&mut tx, owner_id, "file", file_node_id, "upsert").await?;
+        }
 
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(folder.into())
@@ -1401,6 +1571,43 @@ impl FileRepository for PostgresFileRepository {
         .bind(escaped_query)
         .bind(input.include_deleted)
         .bind(input.limit)
+        .fetch_all(&self.pool)
+        .await
+        .map(|rows| rows.into_iter().map(Into::into).collect())
+        .map_err(map_sqlx_error)
+    }
+
+    async fn list_changes(
+        &self,
+        owner_id: Uuid,
+        after_seq: i64,
+        limit: i64,
+    ) -> Result<Vec<ChangeLogEntry>, RepositoryError> {
+        sqlx::query_as::<_, ChangeLogRow>(
+            "SELECT cl.seq, cl.entity_type, cl.entity_id, cl.op, cl.occurred_at,
+                    f.id AS file_id, f.filename AS file_filename,
+                    f.parent_folder_id AS file_parent_folder_id,
+                    f.content_type AS file_content_type, f.size_bytes AS file_size_bytes,
+                    f.checksum_sha256 AS file_checksum_sha256, f.object_key AS file_object_key,
+                    f.state AS file_state, f.created_at AS file_created_at,
+                    f.updated_at AS file_updated_at, f.completed_at AS file_completed_at,
+                    f.deleted_at AS file_deleted_at,
+                    fo.id AS folder_id, fo.name AS folder_name,
+                    fo.parent_folder_id AS folder_parent_folder_id,
+                    fo.created_at AS folder_created_at, fo.updated_at AS folder_updated_at,
+                    fo.deleted_at AS folder_deleted_at
+             FROM change_log cl
+             LEFT JOIN files f
+                    ON cl.entity_type = 'file' AND cl.op = 'upsert' AND f.id = cl.entity_id
+             LEFT JOIN folders fo
+                    ON cl.entity_type = 'folder' AND cl.op = 'upsert' AND fo.id = cl.entity_id
+             WHERE cl.owner_id = $1 AND cl.seq > $2
+             ORDER BY cl.seq ASC
+             LIMIT $3",
+        )
+        .bind(owner_id)
+        .bind(after_seq)
+        .bind(limit)
         .fetch_all(&self.pool)
         .await
         .map(|rows| rows.into_iter().map(Into::into).collect())

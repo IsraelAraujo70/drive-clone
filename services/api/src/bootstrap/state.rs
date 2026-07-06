@@ -9,9 +9,9 @@ use crate::application::files::{
     CreateUploadUseCase, DeleteFileUseCase, DeleteFolderUseCase, DownloadFileUseCase,
     ExpireResumableUploadsUseCase, FinalizeResumableUploadUseCase, GetUploadStatusUseCase,
     ListDriveTrashUseCase, ListFilesUseCase, ListFoldersUseCase, ListSharedWithMeUseCase,
-    ListSharesUseCase, ListTrashUseCase, PresignUploadPartUseCase, RecordUploadPartUseCase,
-    RestoreFileUseCase, RestoreFolderUseCase, RevokeShareUseCase, SearchFilesUseCase,
-    ShareFileUseCase, UpdateFileUseCase, UpdateFolderUseCase,
+    ListSharesUseCase, ListSyncChangesUseCase, ListTrashUseCase, PresignUploadPartUseCase,
+    RecordUploadPartUseCase, RestoreFileUseCase, RestoreFolderUseCase, RevokeShareUseCase,
+    SearchFilesUseCase, ShareFileUseCase, UpdateFileUseCase, UpdateFolderUseCase,
 };
 use crate::application::ports::auth::AuthRepository;
 use crate::application::ports::clock::{Clock, SystemClock};
@@ -52,6 +52,7 @@ pub struct AppState {
     pub list_shares: ListSharesUseCase,
     pub revoke_share: RevokeShareUseCase,
     pub list_shared_with_me: ListSharedWithMeUseCase,
+    pub list_sync_changes: ListSyncChangesUseCase,
 }
 
 impl AppState {
@@ -126,6 +127,7 @@ impl AppState {
             list_shares: ListSharesUseCase::new(file_repository.clone()),
             revoke_share: RevokeShareUseCase::new(file_repository.clone()),
             list_shared_with_me: ListSharedWithMeUseCase::new(file_repository.clone()),
+            list_sync_changes: ListSyncChangesUseCase::new(file_repository.clone()),
             update_file: UpdateFileUseCase::new(file_repository.clone()),
             update_folder: UpdateFolderUseCase::new(file_repository.clone()),
             download_file: DownloadFileUseCase::new(

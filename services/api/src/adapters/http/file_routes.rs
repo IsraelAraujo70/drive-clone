@@ -11,8 +11,8 @@ use crate::adapters::http::dto::{
     DriveBrowseResponse, ExpireUploadsResponse, FileResponse, FileShareResponse, FolderResponse,
     ListFilesResponse, ListFoldersResponse, ListSharedWithMeResponse, ListSharesResponse,
     PresignUploadPartRequest, PresignUploadPartResponse, RecordUploadPartRequest, SearchFilesQuery,
-    SearchFilesResponse, ShareFileRequest, UpdateFileRequest, UpdateFolderRequest,
-    UploadPartResponse, UploadStatusResponse,
+    SearchFilesResponse, ShareFileRequest, SyncChangesQuery, SyncChangesResponse,
+    UpdateFileRequest, UpdateFolderRequest, UploadPartResponse, UploadStatusResponse,
 };
 use crate::adapters::http::error::HttpError;
 use crate::bootstrap::state::AppState;
@@ -135,6 +135,18 @@ pub async fn search_files(
     let normalized_query = query.normalized_query();
     let files = state.search_files.execute(&auth.user, query.into()).await?;
     Ok(Json(SearchFilesResponse::new(normalized_query, files)))
+}
+
+pub async fn list_sync_changes(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Query(query): Query<SyncChangesQuery>,
+) -> Result<Json<SyncChangesResponse>, HttpError> {
+    let output = state
+        .list_sync_changes
+        .execute(&auth.user, query.into())
+        .await?;
+    Ok(Json(SyncChangesResponse::from(output)))
 }
 
 pub async fn list_folders(

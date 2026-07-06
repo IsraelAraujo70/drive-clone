@@ -1,0 +1,32 @@
+meta {
+  name: List Sync Changes
+  type: http
+  seq: 1
+}
+get {
+  url: {{baseUrl}}/sync/changes
+  body: none
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+query {
+  cursor: {{syncCursor}}
+  limit: {{syncLimit}}
+}
+
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([200, 401, 422]).to.include(res.status);
+  });
+}
+
+docs {
+  Per-owner cursor-based change feed with tombstones. Send cursor=0 first, then feed next_cursor back. Upserts embed the entity snapshot; deletes carry only entity_id. Negative cursor returns validation_error.
+}

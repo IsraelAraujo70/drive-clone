@@ -32,7 +32,7 @@ use crate::application::ports::id_generator::SequenceIdGenerator;
 use crate::domain::auth::{User, UserWithPassword, hash_password, hash_token};
 use crate::domain::error::DomainError;
 use crate::domain::files::{
-    DriveBrowse, DriveFile, FileShare, FileState, FileUser, Folder, PendingFile,
+    ChangeLogEntry, DriveBrowse, DriveFile, FileShare, FileState, FileUser, Folder, PendingFile,
     ResumableUploadRequest, ResumableUploadSession, SearchAccess, SearchFileResult, SharedFile,
     UploadPart, UploadRequest,
 };
@@ -1032,6 +1032,15 @@ impl FileRepository for FakeFileRepository {
         });
         results.truncate(input.limit as usize);
         Ok(results)
+    }
+
+    async fn list_changes(
+        &self,
+        _owner_id: Uuid,
+        _after_seq: i64,
+        _limit: i64,
+    ) -> Result<Vec<ChangeLogEntry>, RepositoryError> {
+        Ok(Vec::new())
     }
 }
 

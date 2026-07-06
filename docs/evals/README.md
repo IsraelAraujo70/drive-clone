@@ -104,3 +104,18 @@ Three fresh accounts exercise filename search ACLs: the owner sees owned active
 files, a grantee sees only the file explicitly shared with them, a third user's
 private file never appears, deleted files are excluded by default, and
 `include_deleted=true` only exposes the owner's own trash.
+
+## Sync Changes Smoke
+
+Runs against any live API (local stack or production):
+
+```bash
+API_BASE_URL=https://api-production-bcad4.up.railway.app bash docs/evals/sync-changes-smoke.sh
+```
+
+Two fresh accounts exercise the `GET /sync/changes` feed: an owner uploads,
+renames, and trashes a file, then verifies the feed returns upsert, upsert,
+delete in gap-free seq order with a snapshot on upserts and only an id on the
+tombstone; pagination with `limit=1` drains one entry at a time and reports
+`has_more`; a cursor past the end returns empty without advancing; the other
+user's feed never sees the owner's changes; and a negative cursor returns `422`.

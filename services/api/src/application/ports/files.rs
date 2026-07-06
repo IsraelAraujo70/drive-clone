@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use crate::application::ports::RepositoryError;
 use crate::domain::files::{
-    DriveBrowse, DriveFile, FileShare, Folder, PendingFile, ResumableUploadSession,
+    ChangeLogEntry, DriveBrowse, DriveFile, FileShare, Folder, PendingFile, ResumableUploadSession,
     SearchFileResult, SharedFile, UploadPart,
 };
 
@@ -226,4 +226,14 @@ pub trait FileRepository: Send + Sync {
         &self,
         input: SearchFilesRecord,
     ) -> Result<Vec<SearchFileResult>, RepositoryError>;
+
+    /// Returns change-feed entries for `owner_id` with `seq > after_seq`,
+    /// ordered ascending, capped at `limit`. Upsert entries embed the current
+    /// entity snapshot; delete entries carry only the entity id (tombstone).
+    async fn list_changes(
+        &self,
+        owner_id: Uuid,
+        after_seq: i64,
+        limit: i64,
+    ) -> Result<Vec<ChangeLogEntry>, RepositoryError>;
 }

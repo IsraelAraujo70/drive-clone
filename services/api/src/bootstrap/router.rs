@@ -21,6 +21,7 @@ pub fn build_router(state: AppState, cors: CorsConfig) -> Router {
         )
         .route("/drive", get(file_routes::browse_drive))
         .route("/search", get(file_routes::search_files))
+        .route("/sync/changes", get(file_routes::list_sync_changes))
         .route("/drive/trash", get(file_routes::list_drive_trash))
         .route("/files/uploads", post(file_routes::create_upload))
         .route(

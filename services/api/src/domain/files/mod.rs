@@ -4,8 +4,9 @@ pub mod upload;
 pub mod validators;
 
 pub use file::{
-    DriveBrowse, DriveFile, FileShare, FileState, FileUser, Folder, FolderPathEntry, PendingFile,
-    ResumableUploadSession, SearchAccess, SearchFileResult, SharedFile, UploadPart,
+    ChangeEntityType, ChangeLogEntry, ChangeOp, DriveBrowse, DriveFile, FileShare, FileState,
+    FileUser, Folder, FolderPathEntry, PendingFile, ResumableUploadSession, SearchAccess,
+    SearchFileResult, SharedFile, UploadPart,
 };
 pub use quota::ensure_quota;
 pub use upload::{ResumableUploadRequest, UploadRequest};

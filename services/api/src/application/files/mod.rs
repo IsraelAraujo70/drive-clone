@@ -17,6 +17,7 @@ pub mod resumable_upload;
 pub mod revoke_share;
 pub mod search_files;
 pub mod share_file;
+pub mod sync_changes;
 pub mod update_file;
 pub mod update_folder;
 
@@ -44,5 +45,6 @@ pub use resumable_upload::{
 pub use revoke_share::RevokeShareUseCase;
 pub use search_files::{SearchFilesInput, SearchFilesUseCase};
 pub use share_file::{ShareFileInput, ShareFileUseCase};
+pub use sync_changes::{ListSyncChangesUseCase, SyncChangesInput, SyncChangesOutput};
 pub use update_file::{UpdateFileInput, UpdateFileUseCase};
 pub use update_folder::{UpdateFolderInput, UpdateFolderUseCase};

@@ -535,9 +535,77 @@ Files shared with the authenticated user that are `complete` and not deleted, ne
 }
 ```
 
+## Sync
+
+Cursor-based change feed scoped to the authenticated owner. A client persists a
+single integer cursor and polls for everything that changed since. The feed is
+gap-free and monotonic per owner: every mutation bumps `users.change_seq` under
+a row lock and appends a `change_log` row in the same transaction, so visibility
+order always matches sequence order.
+
+Semantics:
+
+- `upsert` covers create, upload completion, rename, move, and restore. The
+  entry embeds a snapshot of the current entity to avoid a follow-up fetch.
+- `delete` is a tombstone. Trash (soft delete) emits `delete`; a restore later
+  emits a new `upsert` with a higher `seq`. For a sync client, an item in the
+  trash is an item removed from the drive. Tombstones carry only `entity_id`.
+- Trashing a folder emits one `delete` per node in the subtree (every folder and
+  every file underneath), each with its own `seq`.
+- Pending uploads never appear; only a completed upload emits its first entry.
+- The feed is per owner. A user never sees another user's changes, and `seq`
+  starts at `1` for each owner independently.
+
+### GET /sync/changes?cursor=\<seq>&limit=\<n>
+
+Authenticated. Returns entries with `seq > cursor`, ascending.
+
+- `cursor` (optional, default `0`): the last `seq` the client has consumed. A
+  first-time client sends `0`. Negative → `422 validation_error`.
+- `limit` (optional, default `100`): clamped to `1..=500`.
+
+Response `200`:
+
+```json
+{
+  "changes": [
+    {
+      "seq": 42,
+      "entity_type": "file",
+      "op": "upsert",
+      "entity_id": "...",
+      "occurred_at": "...",
+      "file": {
+        "id": "...",
+        "filename": "report.pdf",
+        "parent_folder_id": null,
+        "size_bytes": 12345,
+        "content_type": "application/pdf",
+        "checksum_sha256": null,
+        "updated_at": "..."
+      }
+    },
+    {
+      "seq": 43,
+      "entity_type": "folder",
+      "op": "delete",
+      "entity_id": "...",
+      "occurred_at": "..."
+    }
+  ],
+  "next_cursor": 43,
+  "has_more": false
+}
+```
+
+- `next_cursor` is the `seq` of the last returned entry, or the request cursor
+  when the page is empty. Feed it back as `cursor` on the next call.
+- `has_more` is `true` when `changes.len() == limit`; keep paging until it is
+  `false`.
+- `upsert` of a folder embeds a `folder` snapshot (`id`, `name`,
+  `parent_folder_id`, `updated_at`) instead of `file`. Tombstones omit both.
+
 ## Future Contracts
 
 - Share links: revocable tokenized links separate from the current registered
   user email grants.
-- Sync: cursor-based change feed with tombstones and deterministic conflict
-  behavior.

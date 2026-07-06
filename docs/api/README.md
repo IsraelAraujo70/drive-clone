@@ -297,6 +297,66 @@ Response `200`:
 }
 ```
 
+## Sync
+
+### `GET /sync/changes?cursor=<seq>&limit=<n>`
+
+Authenticated. Per-owner, cursor-based change feed with tombstones. Every file
+and folder mutation appends a gap-free, monotonic entry under the owner's
+`change_seq`, so a client can persist one integer and poll for deltas.
+
+Query:
+
+- `cursor` (optional, default `0`): last consumed `seq`. First call sends `0`.
+  Negative → `422 validation_error`.
+- `limit` (optional, default `100`, clamped to `1..=500`).
+
+Behavior:
+
+- `op: "upsert"` covers create, upload completion, rename, move, and restore and
+  embeds the current entity snapshot (`file` or `folder`).
+- `op: "delete"` is a tombstone (soft delete / trash), carrying only
+  `entity_id`. Restoring emits a later `upsert`.
+- Trashing a folder emits one `delete` per node in the subtree.
+- Pending uploads never appear. Changes are isolated per owner.
+
+Response `200`:
+
+```json
+{
+  "changes": [
+    {
+      "seq": 42,
+      "entity_type": "file",
+      "op": "upsert",
+      "entity_id": "uuid",
+      "occurred_at": "2026-07-06T12:00:00Z",
+      "file": {
+        "id": "uuid",
+        "filename": "report.pdf",
+        "parent_folder_id": null,
+        "size_bytes": 12345,
+        "content_type": "application/pdf",
+        "checksum_sha256": null,
+        "updated_at": "2026-07-06T12:00:00Z"
+      }
+    },
+    {
+      "seq": 43,
+      "entity_type": "folder",
+      "op": "delete",
+      "entity_id": "uuid",
+      "occurred_at": "2026-07-06T12:00:01Z"
+    }
+  ],
+  "next_cursor": 43,
+  "has_more": false
+}
+```
+
+`next_cursor` is the last returned `seq` (or the request cursor when empty).
+`has_more` is `true` while `changes.len() == limit`; page until it is `false`.
+
 ## Folders
 
 ### `POST /folders`
@@ -719,8 +779,6 @@ Responses:
 
 - Share links: revocable tokenized links separate from registered-user email
   grants.
-- Sync: cursor-based `/sync/changes` contract with tombstones and deterministic
-  conflict behavior.
 
 ## Validation Commands
 

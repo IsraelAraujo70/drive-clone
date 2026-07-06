@@ -36,6 +36,8 @@ const environments = [
       loginPassword: "password123",
       checksumSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       sizeBytes: "12",
+      syncCursor: "0",
+      syncLimit: "100",
     },
   },
   {
@@ -61,6 +63,8 @@ const environments = [
       loginPassword: "password123",
       checksumSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       sizeBytes: "12",
+      syncCursor: "0",
+      syncLimit: "100",
     },
   },
 ];
@@ -208,6 +212,24 @@ const folders = [
         auth: "bearer",
         docs: "Returns top-level trash entries for folders and files owned by the authenticated user.",
         tests: ["expect([200, 401]).to.include(res.status);"],
+      },
+    ],
+  },
+  {
+    dir: "sync",
+    name: "Sync",
+    requests: [
+      {
+        name: "List Sync Changes",
+        method: "get",
+        url: "{{baseUrl}}/sync/changes",
+        auth: "bearer",
+        query: {
+          cursor: "{{syncCursor}}",
+          limit: "{{syncLimit}}",
+        },
+        docs: "Per-owner cursor-based change feed with tombstones. Send cursor=0 first, then feed next_cursor back. Upserts embed the entity snapshot; deletes carry only entity_id. Negative cursor returns validation_error.",
+        tests: ["expect([200, 401, 422]).to.include(res.status);"],
       },
     ],
   },

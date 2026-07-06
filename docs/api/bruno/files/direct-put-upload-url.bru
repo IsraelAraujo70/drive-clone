@@ -1,0 +1,28 @@
+meta {
+  name: Direct PUT Upload URL
+  type: http
+  seq: 2
+}
+put {
+  url: {{uploadUrl}}
+  body: text
+  auth: none
+}
+headers {
+  Accept: application/json
+  Content-Type: text/plain
+}
+
+body:text {
+hello bruno
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([200, 201, 204, 403]).to.include(res.status);
+  });
+}
+
+docs {
+  Uploads raw bytes to the presigned object-storage URL returned by Create Upload. This is not authenticated by the API bearer token.
+}

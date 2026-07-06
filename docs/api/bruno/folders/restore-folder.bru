@@ -1,0 +1,27 @@
+meta {
+  name: Restore Folder
+  type: http
+  seq: 5
+}
+post {
+  url: {{baseUrl}}/folders/{{folderId}}/restore
+  body: none
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([200, 401, 404, 409]).to.include(res.status);
+  });
+}
+
+docs {
+  Owner-only restore for the folder tree deleted by that folder delete. Fails if the parent remains deleted.
+}

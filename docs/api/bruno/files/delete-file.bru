@@ -1,0 +1,27 @@
+meta {
+  name: Delete File
+  type: http
+  seq: 7
+}
+delete {
+  url: {{baseUrl}}/files/{{fileId}}
+  body: none
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([204, 401, 404]).to.include(res.status);
+  });
+}
+
+docs {
+  Owner-only soft delete. Shares are retained but stop granting access while the file is deleted.
+}

@@ -1,0 +1,35 @@
+meta {
+  name: Update Folder
+  type: http
+  seq: 3
+}
+patch {
+  url: {{baseUrl}}/folders/{{folderId}}
+  body: json
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+  Content-Type: application/json
+}
+
+body:json {
+{
+  "name": "Bruno Folder Renamed",
+  "parent_folder_id": null
+}
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([200, 401, 404, 409, 422]).to.include(res.status);
+  });
+}
+
+docs {
+  Owner-only rename and/or move. Moving a folder into itself or a descendant returns invalid_file_state.
+}

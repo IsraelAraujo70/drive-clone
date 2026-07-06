@@ -1,0 +1,27 @@
+meta {
+  name: List Folders
+  type: http
+  seq: 2
+}
+get {
+  url: {{baseUrl}}/folders
+  body: none
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([200, 401]).to.include(res.status);
+  });
+}
+
+docs {
+  Returns all active folders owned by the user as a flat list for move dialogs.
+}

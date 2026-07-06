@@ -1,0 +1,41 @@
+meta {
+  name: Create Folder
+  type: http
+  seq: 1
+}
+post {
+  url: {{baseUrl}}/folders
+  body: json
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+  Content-Type: application/json
+}
+
+body:json {
+{
+  "name": "Bruno Folder",
+  "parent_folder_id": null
+}
+}
+
+script:post-response {
+if (res.body && res.body.id) {
+  bru.setEnvVar('folderId', res.body.id);
+}
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([201, 401, 404, 422]).to.include(res.status);
+  });
+}
+
+docs {
+  Creates a folder in My Drive root or inside an active owned folder. Names are trimmed, max 255 chars, and cannot contain path separators.
+}

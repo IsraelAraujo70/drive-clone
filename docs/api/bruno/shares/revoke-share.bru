@@ -1,0 +1,27 @@
+meta {
+  name: Revoke Share
+  type: http
+  seq: 3
+}
+delete {
+  url: {{baseUrl}}/files/{{fileId}}/shares/{{granteeId}}
+  body: none
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([204, 401, 404]).to.include(res.status);
+  });
+}
+
+docs {
+  Owner-only revoke. Unknown share or cross-user revoke returns file_not_found.
+}

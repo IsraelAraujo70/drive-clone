@@ -1,0 +1,27 @@
+meta {
+  name: Browse Root
+  type: http
+  seq: 1
+}
+get {
+  url: {{baseUrl}}/drive
+  body: none
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([200, 401]).to.include(res.status);
+  });
+}
+
+docs {
+  Browses My Drive root. Returns active child folders and completed active files only.
+}

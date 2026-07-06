@@ -41,6 +41,8 @@ apps/
   web/
 contracts/
 docs/
+  api/
+    bruno/
 infra/
   railway/
 services/
@@ -52,6 +54,8 @@ Current deployable services:
 
 - `services/api`: Rust API with auth, direct upload/download, file sharing, trash, folders, rename, move, and filename search.
 - `apps/web`: Next.js app with auth, `/drive`, folder browsing, file actions, sharing, trash, and command-palette search.
+
+API documentation and runnable Bruno requests live in [docs/api](./docs/api/README.md).
 
 Run locally:
 

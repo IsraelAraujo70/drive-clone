@@ -1,0 +1,33 @@
+meta {
+  name: Search Files
+  type: http
+  seq: 3
+}
+get {
+  url: {{baseUrl}}/search
+  body: none
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+query {
+  q: {{searchQuery}}
+  include_deleted: false
+  limit: 20
+}
+
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([200, 401, 422]).to.include(res.status);
+  });
+}
+
+docs {
+  Searches completed files by filename. Scope is owned plus shared-with-me. Trash is excluded by default and private files never appear.
+}

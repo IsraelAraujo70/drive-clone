@@ -1,0 +1,27 @@
+meta {
+  name: List Shared With Me
+  type: http
+  seq: 10
+}
+get {
+  url: {{baseUrl}}/files/shared-with-me
+  body: none
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([200, 401]).to.include(res.status);
+  });
+}
+
+docs {
+  Returns active complete files shared with the authenticated user. Each file includes owner identity.
+}

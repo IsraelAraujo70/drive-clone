@@ -1,0 +1,40 @@
+meta {
+  name: Login
+  type: http
+  seq: 2
+}
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+headers {
+  Accept: application/json
+  Content-Type: application/json
+}
+
+body:json {
+{
+  "email": "user@example.com",
+  "password": "password123"
+}
+}
+
+script:post-response {
+if (res.body && res.body.token) {
+  bru.setEnvVar('authToken', res.body.token);
+}
+if (res.body && res.body.user && res.body.user.id) {
+  bru.setEnvVar('userId', res.body.user.id);
+}
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([200, 401]).to.include(res.status);
+  });
+}
+
+docs {
+  Authenticates an existing user. Unknown email and wrong password both return invalid_credentials. Saves token and user id to the active environment.
+}

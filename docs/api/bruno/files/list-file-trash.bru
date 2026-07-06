@@ -1,0 +1,27 @@
+meta {
+  name: List File Trash
+  type: http
+  seq: 9
+}
+get {
+  url: {{baseUrl}}/files/trash
+  body: none
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([200, 401]).to.include(res.status);
+  });
+}
+
+docs {
+  Returns deleted files owned by the authenticated user, most recently deleted first.
+}

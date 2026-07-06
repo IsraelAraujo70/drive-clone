@@ -1,0 +1,33 @@
+meta {
+  name: Search Files Including Own Trash
+  type: http
+  seq: 4
+}
+get {
+  url: {{baseUrl}}/search
+  body: none
+  auth: bearer
+}
+auth:bearer {
+  token: {{authToken}}
+}
+
+query {
+  q: {{searchQuery}}
+  include_deleted: true
+  limit: 20
+}
+
+headers {
+  Accept: application/json
+}
+
+tests {
+  test("response status is documented", function() {
+    expect([200, 401, 422]).to.include(res.status);
+  });
+}
+
+docs {
+  Searches active accessible files plus deleted files owned by the authenticated user. Deleted shared files stay hidden.
+}

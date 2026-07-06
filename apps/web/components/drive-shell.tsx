@@ -64,7 +64,6 @@ import { Separator } from "@/components/ui/separator"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { Spinner } from "@/components/ui/spinner"
 import {
-  ApiError,
   api,
   uploadFileDirect,
   type FileRecord,
@@ -75,6 +74,10 @@ import {
 import { useAuth } from "@/lib/auth"
 import { formatBytes } from "@/lib/format"
 import { useModifierSymbol } from "@/lib/platform"
+import {
+  getApiErrorMessage,
+  getShareErrorMessage,
+} from "@/lib/shareErrors"
 
 function HeaderSearch() {
   const { openMenu } = useCommandMenu()
@@ -163,17 +166,6 @@ function formatDate(value: string | null): string {
   return dateFormatter.format(new Date(value))
 }
 
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Something went wrong. Try again."
-}
-
-function getApiErrorMessage(error: unknown): string {
-  if (error instanceof ApiError) {
-    return `${error.code}: ${error.message}`
-  }
-  return getErrorMessage(error)
-}
-
 function isSharedFile(file: FileRecord | SharedFileRecord): file is SharedFileRecord {
   return "owner" in file
 }
@@ -247,11 +239,12 @@ function ShareDialog({
     setSubmitting(true)
     setError(null)
     try {
-      await api.shareFile(token, file.id, email.trim())
+      const shareEmail = email.trim()
+      await api.shareFile(token, file.id, shareEmail)
       setEmail("")
       await loadShares()
     } catch (caught) {
-      setError(getApiErrorMessage(caught))
+      setError(getShareErrorMessage(caught, email.trim()))
     } finally {
       setSubmitting(false)
     }

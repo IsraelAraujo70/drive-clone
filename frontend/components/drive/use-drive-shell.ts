@@ -16,8 +16,10 @@ import { useAuth } from "@/lib/auth"
 import { getVisibleDriveItems } from "@/lib/driveView"
 import {
   clearExpiredUploads,
+  dismissUpload,
   fileMatchesStoredUpload,
   forgetUpload,
+  hasClearableExpiredUploads,
   mergePendingUploads,
   pendingStoredUploads,
   readStoredUploads,
@@ -56,6 +58,7 @@ export function useDriveShell() {
     PendingResumableUpload[]
   >([])
   const [clearingExpired, setClearingExpired] = useState(false)
+  const [canClearExpiredUploads, setCanClearExpiredUploads] = useState(false)
   const [resumeTarget, setResumeTarget] =
     useState<PendingResumableUpload | null>(null)
   const [downloadId, setDownloadId] = useState<string | null>(null)
@@ -89,6 +92,7 @@ export function useDriveShell() {
 
   const refreshPendingUploads = useCallback(() => {
     setPendingUploads(pendingStoredUploads())
+    setCanClearExpiredUploads(hasClearableExpiredUploads())
   }, [])
 
   const syncPendingUploads = useCallback(async () => {
@@ -99,8 +103,13 @@ export function useDriveShell() {
     try {
       const response = await api.listPendingUploads(token)
       const serverUploads: ServerPendingUpload[] = response.uploads
+      const activeFileIds = new Set(
+        serverUploads.map((upload) => upload.file_id)
+      )
+      setCanClearExpiredUploads(hasClearableExpiredUploads(activeFileIds))
       setPendingUploads(mergePendingUploads(serverUploads))
     } catch {
+      setCanClearExpiredUploads(hasClearableExpiredUploads())
       setPendingUploads(pendingStoredUploads())
     }
   }, [token])
@@ -360,7 +369,7 @@ export function useDriveShell() {
   }
 
   function handleDismissPendingUpload(pending: PendingResumableUpload) {
-    forgetUpload(pending.key)
+    dismissUpload(pending)
     void syncPendingUploads()
   }
 
@@ -622,6 +631,7 @@ export function useDriveShell() {
     activeView,
     allFolders,
     breadcrumbs,
+    canClearExpiredUploads,
     clearingExpired,
     completedFilesCount: completedFiles.length,
     createFolderOpen,

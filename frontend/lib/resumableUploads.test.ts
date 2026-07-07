@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest"
 
 import {
   clearExpiredUploads,
+  dismissUpload,
   fileMatchesStoredUpload,
   forgetUpload,
+  hasClearableExpiredUploads,
   mergePendingUploads,
   pendingStoredUploads,
+  readDismissedUploadIds,
   readStoredUploads,
   rememberUpload,
   resumableUploadKey,
@@ -170,9 +173,86 @@ describe("mergePendingUploads", () => {
     expect(merged[0].key).toBe("server-only")
     expect(merged[0].upload.filename).toBe("remote.iso")
   })
+
+  it("does not re-surface a dismissed server session", () => {
+    const storage = new MemoryStorage()
+    const key = resumableUploadKey(file(), null)
+    const pending = { key, upload: upload(), server: serverUpload() }
+    rememberUpload(key, upload(), storage)
+
+    dismissUpload(pending, storage)
+    const merged = mergePendingUploads([serverUpload()], storage)
+
+    expect(merged).toEqual([])
+    expect(readStoredUploads(storage)).not.toHaveProperty(key)
+    expect(readDismissedUploadIds(storage)).toEqual(new Set(["file-1"]))
+  })
+
+  it("prunes dismissed sessions after the server stops reporting them", () => {
+    const storage = new MemoryStorage()
+    const key = resumableUploadKey(file(), null)
+    const pending = { key, upload: upload(), server: serverUpload() }
+    dismissUpload(pending, storage)
+
+    expect(mergePendingUploads([], storage)).toEqual([])
+
+    expect(readDismissedUploadIds(storage)).toEqual(new Set())
+  })
+
+  it("allows a remembered upload to reappear after the same file id was dismissed", () => {
+    const storage = new MemoryStorage()
+    const key = resumableUploadKey(file(), null)
+    const pending = { key, upload: upload(), server: serverUpload() }
+    dismissUpload(pending, storage)
+
+    rememberUpload(key, upload(), storage)
+    const merged = mergePendingUploads([serverUpload()], storage)
+
+    expect(merged).toHaveLength(1)
+    expect(readDismissedUploadIds(storage)).toEqual(new Set())
+  })
 })
 
 describe("clearExpiredUploads", () => {
+  it("reports whether entries are clearable before mutating storage", () => {
+    const storage = new MemoryStorage()
+    const expiredKey = resumableUploadKey(file("old.dmg"), null)
+    const activeKey = resumableUploadKey(file(), null)
+    rememberUpload(
+      expiredKey,
+      upload({
+        file_id: "file-old",
+        filename: "old.dmg",
+        expires_at: "2026-07-05T00:00:00.000Z",
+      }),
+      storage
+    )
+    rememberUpload(activeKey, upload(), storage)
+
+    expect(
+      hasClearableExpiredUploads(
+        null,
+        Date.parse("2026-07-06T00:00:00.000Z"),
+        storage
+      )
+    ).toBe(true)
+    expect(readStoredUploads(storage)).toHaveProperty(expiredKey)
+  })
+
+  it("does not report active server sessions as clearable", () => {
+    const storage = new MemoryStorage()
+    const activeKey = resumableUploadKey(file(), null)
+    rememberUpload(activeKey, upload(), storage)
+
+    expect(
+      hasClearableExpiredUploads(
+        new Set(["file-1"]),
+        Date.parse("2026-07-06T00:00:00.000Z"),
+        storage
+      )
+    ).toBe(false)
+  })
+
   it("removes entries expired locally", () => {
     const storage = new MemoryStorage()
     const expiredKey = resumableUploadKey(file("old.dmg"), null)

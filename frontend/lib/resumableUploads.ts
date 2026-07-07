@@ -1,4 +1,5 @@
 const RESUMABLE_UPLOADS_KEY = "drive_clone_resumable_uploads_v1"
+const DISMISSED_UPLOADS_KEY = "drive_clone_dismissed_uploads_v1"
 
 type StorageLike = Pick<Storage, "getItem" | "setItem">
 
@@ -80,6 +81,32 @@ export function writeStoredUploads(
   storage?.setItem(RESUMABLE_UPLOADS_KEY, JSON.stringify(uploads))
 }
 
+export function readDismissedUploadIds(
+  storage: StorageLike | null = browserStorage()
+): Set<string> {
+  if (!storage) {
+    return new Set()
+  }
+  try {
+    const parsed = JSON.parse(storage.getItem(DISMISSED_UPLOADS_KEY) ?? "[]")
+    if (!Array.isArray(parsed)) {
+      return new Set()
+    }
+    return new Set(
+      parsed.filter((fileId): fileId is string => typeof fileId === "string")
+    )
+  } catch {
+    return new Set()
+  }
+}
+
+export function writeDismissedUploadIds(
+  fileIds: Set<string>,
+  storage: StorageLike | null = browserStorage()
+) {
+  storage?.setItem(DISMISSED_UPLOADS_KEY, JSON.stringify([...fileIds].sort()))
+}
+
 export function rememberUpload(
   key: string,
   upload: StoredResumableUpload,
@@ -88,6 +115,11 @@ export function rememberUpload(
   const uploads = readStoredUploads(storage)
   uploads[key] = upload
   writeStoredUploads(uploads, storage)
+
+  const dismissed = readDismissedUploadIds(storage)
+  if (dismissed.delete(upload.file_id)) {
+    writeDismissedUploadIds(dismissed, storage)
+  }
 }
 
 export function forgetUpload(
@@ -97,6 +129,16 @@ export function forgetUpload(
   const uploads = readStoredUploads(storage)
   delete uploads[key]
   writeStoredUploads(uploads, storage)
+}
+
+export function dismissUpload(
+  pending: PendingResumableUpload,
+  storage: StorageLike | null = browserStorage()
+) {
+  forgetUpload(pending.key, storage)
+  const dismissed = readDismissedUploadIds(storage)
+  dismissed.add(pending.upload.file_id)
+  writeDismissedUploadIds(dismissed, storage)
 }
 
 export function pendingStoredUploads(
@@ -144,6 +186,7 @@ export function mergePendingUploads(
   storage: StorageLike | null = browserStorage()
 ): PendingResumableUpload[] {
   const stored = readStoredUploads(storage)
+  const dismissed = readDismissedUploadIds(storage)
   const localByFileId = new Map<string, { key: string; upload: StoredResumableUpload }>()
   for (const [key, upload] of Object.entries(stored)) {
     localByFileId.set(upload.file_id, { key, upload })
@@ -161,7 +204,18 @@ export function mergePendingUploads(
     writeStoredUploads(stored, storage)
   }
 
+  const dismissedBeforePrune = dismissed.size
+  for (const fileId of dismissed) {
+    if (!serverFileIds.has(fileId)) {
+      dismissed.delete(fileId)
+    }
+  }
+  if (dismissed.size !== dismissedBeforePrune) {
+    writeDismissedUploadIds(dismissed, storage)
+  }
+
   return serverUploads
+    .filter((server) => !dismissed.has(server.file_id))
     .map((server) => {
       const local = localByFileId.get(server.file_id)
       const key = local?.key ?? server.file_id
@@ -207,6 +261,20 @@ export function clearExpiredUploads(
     writeStoredUploads(stored, storage)
   }
   return removed
+}
+
+export function hasClearableExpiredUploads(
+  activeServerFileIds: Set<string> | null = null,
+  nowMs = Date.now(),
+  storage: StorageLike | null = browserStorage()
+): boolean {
+  const stored = readStoredUploads(storage)
+  return Object.values(stored).some((upload) => {
+    const expiredLocally = new Date(upload.expires_at).getTime() <= nowMs
+    const goneServerSide =
+      activeServerFileIds !== null && !activeServerFileIds.has(upload.file_id)
+    return expiredLocally || goneServerSide
+  })
 }
 
 // Initial progress when resuming: the parts already confirmed server-side count

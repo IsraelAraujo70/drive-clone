@@ -1,4 +1,5 @@
 const pendingUploadsKey = "drive_clone_resumable_uploads_v1"
+const dismissedUploadsKey = "drive_clone_dismissed_uploads_v1"
 const partSizeBytes = 5 * 1024 * 1024
 const contentType = "application/octet-stream"
 
@@ -7,6 +8,59 @@ function uniqueId() {
 }
 
 describe("resumable upload recovery", () => {
+  it("keeps a dismissed server-side pending upload hidden after reload", () => {
+    const id = uniqueId()
+    const email = `dismiss-${id}@example.com`
+    const filename = `dismiss-demo-${id}.bin`
+    const sizeBytes = partSizeBytes + 17
+    let token = ""
+    let fileId = ""
+
+    cy.signupByApi(email).then((auth) =>
+      cy
+        .createResumableSession(auth.token, {
+          filename,
+          contentType,
+          sizeBytes,
+          partSizeBytes,
+        })
+        .then((session) => {
+          token = auth.token
+          fileId = session.file_id
+        })
+    )
+
+    cy.then(() => {
+      cy.visit("/drive", {
+        onBeforeLoad(win) {
+          win.localStorage.setItem("drive_clone_token", token)
+        },
+      })
+    })
+
+    cy.get('[data-cy="pending-upload-card"]', { timeout: 15000 }).should(
+      "contain",
+      filename
+    )
+    cy.get('[data-cy="clear-expired-uploads"]').should("be.disabled")
+    cy.get('[data-cy="dismiss-upload"]').click()
+    cy.get('[data-cy="pending-upload-card"]', { timeout: 15000 }).should(
+      "not.exist"
+    )
+    cy.window().then((win) => {
+      expect(
+        JSON.parse(win.localStorage.getItem(dismissedUploadsKey) ?? "[]")
+      ).to.include(fileId)
+    })
+
+    cy.reload()
+
+    cy.get('[data-cy="pending-upload-card"]').should("not.exist")
+    cy.window().then((win) => {
+      expect(win.localStorage.getItem(pendingUploadsKey)).to.not.contain(fileId)
+    })
+  })
+
   it("resumes a real multipart session and finalizes the completed file", () => {
     const id = uniqueId()
     const email = `resume-${id}@example.com`

@@ -88,6 +88,7 @@ export function DriveShell() {
               <PendingUploadCard
                 pendingUploads={drive.pendingUploads}
                 clearingExpired={drive.clearingExpired}
+                canClearExpired={drive.canClearExpiredUploads}
                 onClearExpired={() => void drive.handleClearExpiredUploads()}
                 onDismiss={drive.handleDismissPendingUpload}
                 onResume={drive.handleResumeUpload}

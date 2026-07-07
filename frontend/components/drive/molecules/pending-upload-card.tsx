@@ -16,12 +16,14 @@ import type { PendingResumableUpload } from "@/lib/resumableUploads"
 export function PendingUploadCard({
   pendingUploads,
   clearingExpired,
+  canClearExpired,
   onClearExpired,
   onDismiss,
   onResume,
 }: {
   pendingUploads: PendingResumableUpload[]
   clearingExpired: boolean
+  canClearExpired: boolean
   onClearExpired: () => void
   onDismiss: (pending: PendingResumableUpload) => void
   onResume: (pending: PendingResumableUpload) => void
@@ -38,9 +40,10 @@ export function PendingUploadCard({
         <CardAction>
           <Button
             type="button"
+            data-cy="clear-expired-uploads"
             variant="ghost"
             size="sm"
-            disabled={clearingExpired}
+            disabled={clearingExpired || !canClearExpired}
             onClick={onClearExpired}
           >
             {clearingExpired ? "Clearing…" : "Clear expired"}

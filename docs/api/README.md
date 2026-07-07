@@ -195,6 +195,49 @@ Responses:
 - `200`: `{ "user": User, "token": "opaque-token" }`
 - `401 invalid_credentials`
 
+### `POST /auth/password/forgot`
+
+Requests a one-hour password reset link.
+
+Request:
+
+```json
+{
+  "email": "user@example.com"
+}
+```
+
+Rules:
+
+- Email is trimmed and lowercased.
+- Unknown email returns `204` to avoid account enumeration.
+- A new reset link invalidates older unused reset links for the same account.
+
+Responses:
+
+- `204`
+- `422 validation_error`
+- `502 email_error`
+
+### `POST /auth/password/reset`
+
+Consumes a reset token, changes the password, and revokes existing sessions for
+that user.
+
+Request:
+
+```json
+{
+  "token": "opaque-reset-token",
+  "password": "Password123!"
+}
+```
+
+Responses:
+
+- `204`
+- `422 validation_error`
+
 ### `POST /auth/logout`
 
 Authenticated. Deletes the current server-side session.

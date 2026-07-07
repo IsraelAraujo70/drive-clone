@@ -87,6 +87,30 @@ describe("api client", () => {
     await expect(api.logout("secret-token")).resolves.toBeUndefined()
   })
 
+  it("posts password reset requests without a bearer token", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await api.requestPasswordReset({ email: "user@example.com" })
+    await api.resetPassword({ token: "token", password: "Password123!" })
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      `${API_BASE_URL}/auth/password/forgot`,
+      `${API_BASE_URL}/auth/password/reset`,
+    ])
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      email: "user@example.com",
+    })
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
+      token: "token",
+      password: "Password123!",
+    })
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBeUndefined()
+    expect(fetchMock.mock.calls[1][1].headers.Authorization).toBeUndefined()
+  })
+
   it("creates uploads with authenticated JSON metadata", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(201, {

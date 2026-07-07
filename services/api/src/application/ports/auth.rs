@@ -37,4 +37,18 @@ pub trait AuthRepository: Send + Sync {
     ) -> Result<Option<User>, RepositoryError>;
 
     async fn delete_session(&self, token_hash: &str) -> Result<(), RepositoryError>;
+
+    async fn create_password_reset_token(
+        &self,
+        user_id: Uuid,
+        token_hash: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<(), RepositoryError>;
+
+    async fn reset_password_with_token(
+        &self,
+        token_hash: &str,
+        now: DateTime<Utc>,
+        password_hash: &str,
+    ) -> Result<bool, RepositoryError>;
 }

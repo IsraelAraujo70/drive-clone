@@ -9,6 +9,10 @@ use crate::adapters::object_storage::fake::FakeObjectStorage;
 use crate::application::AppError;
 use crate::application::auth::login::{LoginInput, LoginUseCase};
 use crate::application::auth::logout::LogoutUseCase;
+use crate::application::auth::request_password_reset::{
+    PASSWORD_RESET_TTL_MINUTES, RequestPasswordResetInput, RequestPasswordResetUseCase,
+};
+use crate::application::auth::reset_password::{ResetPasswordInput, ResetPasswordUseCase};
 use crate::application::auth::signup::{SignupInput, SignupUseCase};
 use crate::application::files::{
     BrowseFolderUseCase, CleanupOrphanObjectsUseCase, CompleteUploadUseCase, CreateFolderInput,
@@ -23,9 +27,9 @@ use crate::application::files::{
     RevokeShareUseCase, SearchFilesInput, SearchFilesUseCase, ShareFileInput, ShareFileUseCase,
     UpdateFileInput, UpdateFileUseCase, UpdateFolderInput, UpdateFolderUseCase,
 };
-use crate::application::ports::RepositoryError;
 use crate::application::ports::auth::{AuthRepository, CreateUserRecord};
 use crate::application::ports::clock::{Clock, FixedClock};
+use crate::application::ports::email::{EmailSender, PasswordResetEmail};
 use crate::application::ports::files::{
     CreateFolderRecord, CreatePendingFileRecord, CreateResumableUploadRecord,
     CreateShareLinkRecord, ExpiredUploadRecord, FileRepository, ManualPurgeFileTarget,
@@ -33,6 +37,7 @@ use crate::application::ports::files::{
     SearchFilesRecord, UpdateFileRecord, UpdateFolderRecord,
 };
 use crate::application::ports::id_generator::SequenceIdGenerator;
+use crate::application::ports::{EmailError, RepositoryError};
 use crate::domain::auth::{User, UserWithPassword, hash_password, hash_token};
 use crate::domain::error::DomainError;
 use crate::domain::files::{
@@ -77,8 +82,16 @@ fn completed_file(id: Uuid, object_key: &str) -> DriveFile {
 struct FakeAuthRepository {
     users: Mutex<HashMap<String, UserWithPassword>>,
     sessions: Mutex<HashMap<String, Uuid>>,
+    reset_tokens: Mutex<HashMap<String, FakePasswordResetToken>>,
     next_user_id: Mutex<Option<Uuid>>,
     duplicate_on_create: Mutex<bool>,
+}
+
+#[derive(Clone)]
+struct FakePasswordResetToken {
+    user_id: Uuid,
+    expires_at: DateTime<Utc>,
+    used_at: Option<DateTime<Utc>>,
 }
 
 impl FakeAuthRepository {
@@ -173,6 +186,81 @@ impl AuthRepository for FakeAuthRepository {
 
     async fn delete_session(&self, token_hash: &str) -> Result<(), RepositoryError> {
         self.sessions.lock().unwrap().remove(token_hash);
+        Ok(())
+    }
+
+    async fn create_password_reset_token(
+        &self,
+        user_id: Uuid,
+        token_hash: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<(), RepositoryError> {
+        for token in self.reset_tokens.lock().unwrap().values_mut() {
+            if token.user_id == user_id && token.used_at.is_none() {
+                token.used_at = Some(fixed_now());
+            }
+        }
+        self.reset_tokens.lock().unwrap().insert(
+            token_hash.to_string(),
+            FakePasswordResetToken {
+                user_id,
+                expires_at,
+                used_at: None,
+            },
+        );
+        Ok(())
+    }
+
+    async fn reset_password_with_token(
+        &self,
+        token_hash: &str,
+        now: DateTime<Utc>,
+        password_hash: &str,
+    ) -> Result<bool, RepositoryError> {
+        let Some(token) = self
+            .reset_tokens
+            .lock()
+            .unwrap()
+            .get_mut(token_hash)
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        if token.used_at.is_some() || token.expires_at <= now {
+            return Ok(false);
+        }
+
+        let mut users = self.users.lock().unwrap();
+        let Some((_, row)) = users
+            .iter_mut()
+            .find(|(_, row)| row.user.id == token.user_id)
+        else {
+            return Err(RepositoryError::Unexpected);
+        };
+        row.password_hash = password_hash.to_string();
+        self.reset_tokens
+            .lock()
+            .unwrap()
+            .get_mut(token_hash)
+            .unwrap()
+            .used_at = Some(now);
+        self.sessions
+            .lock()
+            .unwrap()
+            .retain(|_, user_id| *user_id != token.user_id);
+        Ok(true)
+    }
+}
+
+#[derive(Default)]
+struct FakeEmailSender {
+    sent: Mutex<Vec<PasswordResetEmail>>,
+}
+
+#[async_trait]
+impl EmailSender for FakeEmailSender {
+    async fn send_password_reset(&self, email: PasswordResetEmail) -> Result<(), EmailError> {
+        self.sent.lock().unwrap().push(email);
         Ok(())
     }
 }
@@ -1602,6 +1690,118 @@ async fn logout_revokes_session_hash() {
             .lock()
             .unwrap()
             .contains_key(&hash_token(token))
+    );
+}
+
+#[tokio::test]
+async fn request_password_reset_sends_one_hour_link_without_leaking_unknown_email() {
+    let repo = FakeAuthRepository::with_user("user@example.com", "password123");
+    let email = Arc::new(FakeEmailSender::default());
+    let use_case = RequestPasswordResetUseCase::new(
+        repo.clone(),
+        email.clone(),
+        Arc::new(FixedClock::new(fixed_now())),
+        "https://drive.example.com/".to_string(),
+    );
+
+    use_case
+        .execute(RequestPasswordResetInput {
+            email: " USER@example.com ".to_string(),
+        })
+        .await
+        .unwrap();
+    use_case
+        .execute(RequestPasswordResetInput {
+            email: "missing@example.com".to_string(),
+        })
+        .await
+        .unwrap();
+
+    let sent = email.sent.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].to, "user@example.com");
+    assert!(
+        sent[0]
+            .reset_url
+            .starts_with("https://drive.example.com/reset-password?token=")
+    );
+    assert_eq!(
+        sent[0].expires_at,
+        fixed_now() + chrono::Duration::minutes(PASSWORD_RESET_TTL_MINUTES)
+    );
+}
+
+#[tokio::test]
+async fn reset_password_consumes_token_and_revokes_existing_sessions() {
+    let repo = FakeAuthRepository::with_user("user@example.com", "password123");
+    let email = Arc::new(FakeEmailSender::default());
+    let clock: Arc<dyn Clock> = Arc::new(FixedClock::new(fixed_now()));
+    let request = RequestPasswordResetUseCase::new(
+        repo.clone(),
+        email.clone(),
+        clock.clone(),
+        "https://drive.example.com".to_string(),
+    );
+    repo.sessions.lock().unwrap().insert(
+        hash_token("old-session"),
+        Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap(),
+    );
+
+    request
+        .execute(RequestPasswordResetInput {
+            email: "user@example.com".to_string(),
+        })
+        .await
+        .unwrap();
+    let reset_url = email.sent.lock().unwrap()[0].reset_url.clone();
+    let token = reset_url.split("token=").nth(1).unwrap().to_string();
+    let reset = ResetPasswordUseCase::new(repo.clone(), clock);
+
+    reset
+        .execute(ResetPasswordInput {
+            token: token.clone(),
+            password: "new-password123".to_string(),
+        })
+        .await
+        .unwrap();
+
+    assert!(
+        repo.sessions
+            .lock()
+            .unwrap()
+            .get(&hash_token("old-session"))
+            .is_none()
+    );
+    let login = LoginUseCase::new(repo.clone(), Arc::new(FixedClock::new(fixed_now())));
+    assert!(
+        login
+            .execute(LoginInput {
+                email: "user@example.com".to_string(),
+                password: "password123".to_string(),
+            })
+            .await
+            .is_err()
+    );
+    assert!(
+        login
+            .execute(LoginInput {
+                email: "user@example.com".to_string(),
+                password: "new-password123".to_string(),
+            })
+            .await
+            .is_ok()
+    );
+
+    let reused = reset
+        .execute(ResetPasswordInput {
+            token,
+            password: "another-password123".to_string(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        reused,
+        AppError::Domain(DomainError::Validation("Reset link is invalid or expired"))
     );
 }
 

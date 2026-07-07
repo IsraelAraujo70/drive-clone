@@ -26,6 +26,8 @@ pub fn app_with_storage(pool: PgPool, storage: Arc<dyn ObjectStorage>) -> Router
         config.presigned_url_ttl_seconds,
         config.resumable_upload_ttl_seconds,
         config.public_web_url,
+        config.resend_api_key,
+        config.resend_from_email,
     );
     app_with_state(state)
 }

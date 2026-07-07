@@ -1,9 +1,9 @@
 "use client"
 
-import { useState, type FormEvent } from "react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { useState, type FormEvent } from "react"
 
+import { PasswordInput } from "@/components/password-input"
 import { Alert, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -20,47 +20,47 @@ import {
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
-import { PasswordInput } from "@/components/password-input"
 import { Spinner } from "@/components/ui/spinner"
-import { ApiError } from "@/lib/api"
-import { useAuth } from "@/lib/auth"
+import { ApiError, api } from "@/lib/api"
 import { isStrongPassword } from "@/lib/passwordStrength"
 
-export function SignupForm() {
-  const { signup } = useAuth()
-  const router = useRouter()
-  const [displayName, setDisplayName] = useState("")
-  const [email, setEmail] = useState("")
+export function ResetPasswordForm({ token }: { token: string }) {
   const [password, setPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
   const [error, setError] = useState<string | null>(null)
+  const [done, setDone] = useState(false)
   const [pending, setPending] = useState(false)
+  const passwordReady = isStrongPassword(password)
   const passwordsMismatch =
     confirmPassword.length > 0 && password !== confirmPassword
-  const passwordReady = isStrongPassword(password)
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
     setError(null)
+    if (!token) {
+      setError("Reset link is missing a token.")
+      return
+    }
     if (!passwordReady) {
-      setError("Use a stronger password before creating your account.")
+      setError("Use a stronger password before saving it.")
       return
     }
     if (password !== confirmPassword) {
       setError("Passwords do not match.")
       return
     }
+
     setPending(true)
     try {
-      await signup({ email, password, display_name: displayName })
-      router.replace("/drive")
+      await api.resetPassword({ token, password })
+      setDone(true)
     } catch (caught) {
       setError(
         caught instanceof ApiError
           ? caught.message
           : "Could not reach the server. Try again."
       )
+    } finally {
       setPending(false)
     }
   }
@@ -70,10 +70,10 @@ export function SignupForm() {
       <Card>
         <CardHeader>
           <CardTitle className="font-heading text-2xl">
-            Create your account
+            Reset password
           </CardTitle>
           <CardDescription>
-            50 MB of free storage, private by default.
+            Choose a stronger password for your drive.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-6">
@@ -82,34 +82,18 @@ export function SignupForm() {
               <AlertTitle>{error}</AlertTitle>
             </Alert>
           )}
+          {done && (
+            <Alert role="status">
+              <AlertTitle>
+                Password changed. Log in with the new password.
+              </AlertTitle>
+            </Alert>
+          )}
           <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor="name">Name</FieldLabel>
-              <Input
-                id="name"
-                type="text"
-                required
-                maxLength={100}
-                autoComplete="name"
-                value={displayName}
-                onChange={(event) => setDisplayName(event.target.value)}
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="email">Email</FieldLabel>
-              <Input
-                id="email"
-                type="email"
-                required
-                autoComplete="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-              />
-            </Field>
             <Field data-invalid={!passwordReady && password.length > 0}>
-              <FieldLabel htmlFor="password">Password</FieldLabel>
+              <FieldLabel htmlFor="new-password">New password</FieldLabel>
               <PasswordInput
-                id="password"
+                id="new-password"
                 required
                 minLength={8}
                 maxLength={128}
@@ -117,21 +101,23 @@ export function SignupForm() {
                 value={password}
                 showStrength
                 aria-invalid={!passwordReady && password.length > 0}
+                disabled={done}
                 onChange={(event) => setPassword(event.target.value)}
               />
             </Field>
             <Field data-invalid={passwordsMismatch}>
-              <FieldLabel htmlFor="confirm-password">
+              <FieldLabel htmlFor="confirm-new-password">
                 Confirm password
               </FieldLabel>
               <PasswordInput
-                id="confirm-password"
+                id="confirm-new-password"
                 required
                 minLength={8}
                 maxLength={128}
                 autoComplete="new-password"
                 value={confirmPassword}
                 aria-invalid={passwordsMismatch}
+                disabled={done}
                 onChange={(event) => setConfirmPassword(event.target.value)}
               />
               {passwordsMismatch && (
@@ -141,20 +127,25 @@ export function SignupForm() {
           </FieldGroup>
         </CardContent>
         <CardFooter className="flex flex-col gap-4">
-          <Button
-            type="submit"
-            className="w-full"
-            disabled={pending || !passwordReady || password !== confirmPassword}
-          >
-            {pending && <Spinner data-icon="inline-start" />}
-            {pending ? "Creating account…" : "Sign up"}
-          </Button>
-          <p className="text-sm text-muted-foreground">
-            Already have an account?{" "}
-            <Link href="/login" className="text-primary hover:underline">
-              Log in
-            </Link>
-          </p>
+          {!done ? (
+            <Button
+              type="submit"
+              className="w-full"
+              disabled={
+                pending ||
+                !token ||
+                !passwordReady ||
+                password !== confirmPassword
+              }
+            >
+              {pending && <Spinner data-icon="inline-start" />}
+              {pending ? "Saving password…" : "Save new password"}
+            </Button>
+          ) : (
+            <Button asChild className="w-full">
+              <Link href="/login">Log in</Link>
+            </Button>
+          )}
         </CardFooter>
       </Card>
     </form>

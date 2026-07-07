@@ -13,6 +13,11 @@ pub fn build_router(state: AppState, cors: CorsConfig) -> Router {
         .route("/health", get(health))
         .route("/auth/signup", post(auth_routes::signup))
         .route("/auth/login", post(auth_routes::login))
+        .route(
+            "/auth/password/forgot",
+            post(auth_routes::request_password_reset),
+        )
+        .route("/auth/password/reset", post(auth_routes::reset_password))
         .route("/auth/logout", post(auth_routes::logout))
         .route("/auth/me", get(auth_routes::me))
         .route(

@@ -30,6 +30,17 @@ pub struct LoginRequest {
     pub password: String,
 }
 
+#[derive(Deserialize)]
+pub struct RequestPasswordResetRequest {
+    pub email: String,
+}
+
+#[derive(Deserialize)]
+pub struct ResetPasswordRequest {
+    pub token: String,
+    pub password: String,
+}
+
 #[derive(Serialize)]
 pub struct AuthResponse {
     user: User,

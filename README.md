@@ -474,6 +474,7 @@ make down
 make test
 make eval-upload
 make eval-resumable
+make eval-password-reset
 make clean
 ```
 
@@ -494,6 +495,8 @@ S3_URL_STYLE=path \
 S3_ACCESS_KEY_ID=minioadmin \
 S3_SECRET_ACCESS_KEY=minioadmin \
 CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000 \
+PUBLIC_WEB_URL=http://localhost:3000 \
+RESEND_FROM_EMAIL='Drive Clone <onboarding@resend.dev>' \
 cargo run
 
 # 3. Run the web app (in another terminal)
@@ -504,6 +507,9 @@ npm run dev
 
 Environment examples live in `services/api/.env.example` and `apps/web/.env.example`.
 If the web dev server uses another port, add that exact origin to `CORS_ALLOWED_ORIGINS`, for example `http://localhost:3100`.
+Set `RESEND_API_KEY` in the API environment to send password reset emails
+through Resend. Without it, local reset links are logged by the API for
+development.
 
 ### Tests
 
@@ -516,6 +522,7 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5433/drive_clone cargo test
 cd ../..
 bash docs/evals/minio-upload-smoke.sh
 bash docs/evals/resumable-upload-smoke.sh
+bash docs/evals/password-reset-smoke.sh
 
 # Web: vitest
 cd apps/web
@@ -526,8 +533,8 @@ npm test
 
 Implemented so far:
 
-- Landing page, signup, and login (English UI) with a protected `/drive` shell, built on Next.js + Tailwind CSS + shadcn/ui.
-- Rust API on Axum + SQLx + PostgreSQL: `POST /auth/signup`, `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, and a DB-aware `GET /health`.
+- Landing page, signup, login, forgot-password, and reset-password screens (English UI) with a protected `/drive` shell, built on Next.js + Tailwind CSS + shadcn/ui.
+- Rust API on Axum + SQLx + PostgreSQL: `POST /auth/signup`, `POST /auth/login`, `POST /auth/password/forgot`, `POST /auth/password/reset`, `POST /auth/logout`, `GET /auth/me`, and a DB-aware `GET /health`.
 - File upload/download backend: direct upload compatibility plus resumable
   multipart upload sessions, part signing, status, finalization,
   `GET /files`, and `GET /files/{file_id}/download`.
@@ -540,7 +547,7 @@ Implemented so far:
 - Sync change feed with tombstones and pagination.
 - Worker binary for expired resumable uploads, trash purge with quota decrement,
   orphan object cleanup, and quota reconciliation.
-- Argon2 password hashing; opaque bearer session tokens stored hashed (SHA-256) with 30-day expiry.
+- Argon2 password hashing; opaque bearer session tokens and reset tokens stored hashed (SHA-256), with reset tokens expiring after one hour and revoking existing sessions on use.
 - Auth contract in `contracts/auth.md`; files contract in `contracts/files.md`; migrations in `services/api/migrations`.
 - Gate tests: API validation/token tests plus full HTTP auth/file/folder/share/trash/resumable-upload flows against real Postgres, and web tests.
 - Repo-connected Railway deployments for the API and web services.

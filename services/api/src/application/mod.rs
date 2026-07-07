@@ -2,6 +2,7 @@ pub mod auth;
 pub mod files;
 pub mod ports;
 
+use crate::application::ports::EmailError;
 use crate::application::ports::{RepositoryError, StorageError};
 use crate::domain::error::DomainError;
 
@@ -13,6 +14,7 @@ pub enum AppError {
     Unauthorized,
     Repository,
     Storage,
+    Email,
     Internal,
 }
 
@@ -41,6 +43,12 @@ impl From<RepositoryError> for AppError {
 impl From<StorageError> for AppError {
     fn from(_: StorageError) -> Self {
         Self::Storage
+    }
+}
+
+impl From<EmailError> for AppError {
+    fn from(_: EmailError) -> Self {
+        Self::Email
     }
 }
 

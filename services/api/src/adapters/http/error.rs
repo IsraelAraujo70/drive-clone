@@ -67,6 +67,11 @@ impl IntoResponse for HttpError {
                 "storage_error",
                 "Object storage could not satisfy the request",
             ),
+            AppError::Email => (
+                StatusCode::BAD_GATEWAY,
+                "email_error",
+                "Email delivery could not satisfy the request",
+            ),
             AppError::Repository | AppError::Internal => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",

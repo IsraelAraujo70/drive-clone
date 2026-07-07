@@ -43,6 +43,8 @@ pub async fn run() {
         config.presigned_url_ttl_seconds,
         config.resumable_upload_ttl_seconds,
         config.public_web_url.clone(),
+        config.resend_api_key.clone(),
+        config.resend_from_email.clone(),
     );
 
     tracing::info!("drive-clone-api listening on {address}");

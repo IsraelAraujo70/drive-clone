@@ -4,9 +4,13 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
 use crate::adapters::http::auth_extractor::AuthenticatedUser;
-use crate::adapters::http::dto::{AuthResponse, LoginRequest, SignupRequest};
+use crate::adapters::http::dto::{
+    AuthResponse, LoginRequest, RequestPasswordResetRequest, ResetPasswordRequest, SignupRequest,
+};
 use crate::adapters::http::error::HttpError;
 use crate::application::auth::login::LoginInput;
+use crate::application::auth::request_password_reset::RequestPasswordResetInput;
+use crate::application::auth::reset_password::ResetPasswordInput;
 use crate::application::auth::signup::SignupInput;
 use crate::bootstrap::state::AppState;
 use crate::domain::auth::User;
@@ -38,6 +42,33 @@ pub async fn login(
         })
         .await?;
     Ok((StatusCode::OK, Json(AuthResponse::from(response))))
+}
+
+pub async fn request_password_reset(
+    State(state): State<AppState>,
+    Json(request): Json<RequestPasswordResetRequest>,
+) -> Result<StatusCode, HttpError> {
+    state
+        .request_password_reset
+        .execute(RequestPasswordResetInput {
+            email: request.email,
+        })
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn reset_password(
+    State(state): State<AppState>,
+    Json(request): Json<ResetPasswordRequest>,
+) -> Result<StatusCode, HttpError> {
+    state
+        .reset_password
+        .execute(ResetPasswordInput {
+            token: request.token,
+            password: request.password,
+        })
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn logout(

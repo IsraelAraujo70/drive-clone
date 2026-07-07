@@ -19,6 +19,7 @@ services:
       PRESIGNED_URL_TTL_SECONDS: 900
       RESUMABLE_UPLOAD_TTL_SECONDS: 86400
       PUBLIC_WEB_URL: http://localhost:3000
+      RESEND_FROM_EMAIL: Drive Clone <onboarding@resend.dev>
       TRASH_RETENTION_DAYS: 30
       WORKER_INTERVAL_SECONDS: 300
     ports:
@@ -66,6 +67,7 @@ services:
       PRESIGNED_URL_TTL_SECONDS: 900
       RESUMABLE_UPLOAD_TTL_SECONDS: 86400
       PUBLIC_WEB_URL: http://localhost:3000
+      RESEND_FROM_EMAIL: Drive Clone <onboarding@resend.dev>
       TRASH_RETENTION_DAYS: 30
       WORKER_INTERVAL_SECONDS: 300
     depends_on:

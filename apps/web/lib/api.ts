@@ -369,6 +369,10 @@ export const api = {
     request<AuthResponse>("/auth/signup", { method: "POST", body: input }),
   login: (input: { email: string; password: string }) =>
     request<AuthResponse>("/auth/login", { method: "POST", body: input }),
+  requestPasswordReset: (input: { email: string }) =>
+    request<void>("/auth/password/forgot", { method: "POST", body: input }),
+  resetPassword: (input: { token: string; password: string }) =>
+    request<void>("/auth/password/reset", { method: "POST", body: input }),
   logout: (token: string) =>
     request<void>("/auth/logout", { method: "POST", token }),
   me: (token: string) => request<User>("/auth/me", { token }),
@@ -502,9 +506,7 @@ export const api = {
       token,
     }),
   resolveShareLink: (linkToken: string) =>
-    request<PublicShareLink>(
-      `/shared/links/${encodeURIComponent(linkToken)}`
-    ),
+    request<PublicShareLink>(`/shared/links/${encodeURIComponent(linkToken)}`),
   searchFiles: (
     token: string,
     query: string,

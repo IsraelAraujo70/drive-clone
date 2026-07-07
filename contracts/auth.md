@@ -62,6 +62,36 @@ Responses:
 - `200` → `{ "user": User, "token": string }`
 - `401 invalid_credentials` → wrong password or unknown email (deliberately indistinguishable)
 
+### POST /auth/password/forgot
+
+Request: `{ "email": string }`
+
+Creates a one-hour reset link and sends it to the account email through the
+configured transactional email sender.
+
+- Email is trimmed and lowercased before lookup.
+- Unknown email still returns `204` so the endpoint does not reveal which
+  addresses have accounts.
+- A new reset link invalidates older unused reset links for the same user.
+
+Responses:
+
+- `204` → request accepted
+- `422 validation_error` → invalid email
+- `502 email_error` → account exists but email delivery failed
+
+### POST /auth/password/reset
+
+Request: `{ "token": string, "password": string }`
+
+Consumes a valid reset token, updates the password, and revokes existing
+sessions for that user. Tokens are stored hashed and cannot be used twice.
+
+Responses:
+
+- `204` → password changed
+- `422 validation_error` → invalid/expired token or invalid password
+
 ### POST /auth/logout (authenticated)
 
 Deletes the current session.

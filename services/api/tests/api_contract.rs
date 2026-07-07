@@ -8,6 +8,7 @@ use drive_clone_api::adapters::postgres::PostgresFileRepository;
 use drive_clone_api::application::files::{PurgeTrashUseCase, ReconcileQuotaUseCase};
 use drive_clone_api::application::ports::clock::Clock;
 use drive_clone_api::application::ports::files::FileRepository;
+use drive_clone_api::domain::auth::hash_token;
 use drive_clone_api::{AppState, app_with_state, app_with_storage};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
@@ -259,6 +260,86 @@ async fn login_rejects_bad_credentials(pool: PgPool) {
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"], "invalid_credentials");
+}
+
+#[sqlx::test]
+async fn password_reset_hides_unknown_email_and_changes_password(pool: PgPool) {
+    let app = drive_clone_api::app(pool.clone());
+    let old_token = signup(app.clone(), "reset@example.com").await;
+
+    let (status, body) = request(
+        app.clone(),
+        "POST",
+        "/auth/password/forgot",
+        None,
+        Some(json!({"email": "missing@example.com"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(body, Value::Null);
+
+    let user_id: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE email = $1")
+        .bind("reset@example.com")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) \
+         VALUES ($1, $2, now() + interval '1 hour')",
+    )
+    .bind(user_id)
+    .bind(hash_token("reset-token"))
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let (status, body) = request(
+        app.clone(),
+        "POST",
+        "/auth/password/reset",
+        None,
+        Some(json!({"token": "reset-token", "password": "new-password123"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(body, Value::Null);
+
+    let (status, body) = request(app.clone(), "GET", "/auth/me", Some(&old_token), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"], "unauthorized");
+
+    let (status, body) = request(
+        app.clone(),
+        "POST",
+        "/auth/login",
+        None,
+        Some(json!({"email": "reset@example.com", "password": "password123"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"], "invalid_credentials");
+
+    let (status, body) = request(
+        app.clone(),
+        "POST",
+        "/auth/login",
+        None,
+        Some(json!({"email": "reset@example.com", "password": "new-password123"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["token"].as_str().unwrap().len() > 40);
+
+    let (status, body) = request(
+        app,
+        "POST",
+        "/auth/password/reset",
+        None,
+        Some(json!({"token": "reset-token", "password": "another-password123"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"], "validation_error");
 }
 
 #[sqlx::test]
@@ -1074,6 +1155,8 @@ async fn create_upload_validates_size_and_quota(pool: PgPool) {
         900,
         86_400,
         "http://localhost:3000".to_string(),
+        None,
+        "Drive Clone <onboarding@resend.dev>".to_string(),
     ));
     let (status, body) = request(
         app,

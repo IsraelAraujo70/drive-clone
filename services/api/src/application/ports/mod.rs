@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod clock;
+pub mod email;
 pub mod files;
 pub mod id_generator;
 pub mod object_storage;
@@ -15,5 +16,10 @@ pub enum RepositoryError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageError {
     NotFound,
+    Unexpected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EmailError {
     Unexpected,
 }

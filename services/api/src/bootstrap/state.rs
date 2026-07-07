@@ -2,8 +2,13 @@ use std::sync::Arc;
 
 use sqlx::PgPool;
 
+use crate::adapters::email::noop::NoopEmailSender;
+use crate::adapters::email::resend::ResendEmailSender;
 use crate::adapters::postgres::{PostgresAuthRepository, PostgresFileRepository};
-use crate::application::auth::{GetCurrentUserUseCase, LoginUseCase, LogoutUseCase, SignupUseCase};
+use crate::application::auth::{
+    GetCurrentUserUseCase, LoginUseCase, LogoutUseCase, RequestPasswordResetUseCase,
+    ResetPasswordUseCase, SignupUseCase,
+};
 use crate::application::files::{
     BrowseFolderUseCase, CompleteUploadUseCase, CreateFolderUseCase, CreateResumableUploadUseCase,
     CreateShareLinkUseCase, CreateUploadUseCase, DeleteFileUseCase, DeleteFolderUseCase,
@@ -17,6 +22,7 @@ use crate::application::files::{
 };
 use crate::application::ports::auth::AuthRepository;
 use crate::application::ports::clock::{Clock, SystemClock};
+use crate::application::ports::email::EmailSender;
 use crate::application::ports::files::FileRepository;
 use crate::application::ports::id_generator::{IdGenerator, UuidGenerator};
 use crate::application::ports::object_storage::ObjectStorage;
@@ -27,6 +33,8 @@ pub struct AppState {
     pub signup: SignupUseCase,
     pub login: LoginUseCase,
     pub logout: LogoutUseCase,
+    pub request_password_reset: RequestPasswordResetUseCase,
+    pub reset_password: ResetPasswordUseCase,
     pub get_current_user: GetCurrentUserUseCase,
     pub create_upload: CreateUploadUseCase,
     pub create_resumable_upload: CreateResumableUploadUseCase,
@@ -72,6 +80,8 @@ impl AppState {
         presigned_url_ttl_seconds: i64,
         resumable_upload_ttl_seconds: i64,
         public_web_url: String,
+        resend_api_key: Option<String>,
+        resend_from_email: String,
     ) -> Self {
         let auth_repository: Arc<dyn AuthRepository> =
             Arc::new(PostgresAuthRepository::new(pool.clone()));
@@ -79,12 +89,23 @@ impl AppState {
             Arc::new(PostgresFileRepository::new(pool.clone()));
         let clock: Arc<dyn Clock> = Arc::new(SystemClock);
         let id_generator: Arc<dyn IdGenerator> = Arc::new(UuidGenerator);
+        let email_sender: Arc<dyn EmailSender> = match resend_api_key {
+            Some(api_key) => Arc::new(ResendEmailSender::new(api_key, resend_from_email)),
+            None => Arc::new(NoopEmailSender),
+        };
 
         Self {
             pool,
             signup: SignupUseCase::new(auth_repository.clone(), clock.clone()),
             login: LoginUseCase::new(auth_repository.clone(), clock.clone()),
             logout: LogoutUseCase::new(auth_repository.clone()),
+            request_password_reset: RequestPasswordResetUseCase::new(
+                auth_repository.clone(),
+                email_sender,
+                clock.clone(),
+                public_web_url.clone(),
+            ),
+            reset_password: ResetPasswordUseCase::new(auth_repository.clone(), clock.clone()),
             get_current_user: GetCurrentUserUseCase::new(auth_repository.clone(), clock.clone()),
             create_upload: CreateUploadUseCase::new(
                 file_repository.clone(),

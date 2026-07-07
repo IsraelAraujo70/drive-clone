@@ -68,6 +68,19 @@ browser auth token plus pending upload record in `localStorage`, opens `/drive`,
 clicks `Resume`, attaches the matching local file with a different modified
 timestamp, and verifies the original upload session becomes `complete`.
 
+## Password Reset Smoke
+
+Run after the local compose stack is serving:
+
+```bash
+bash docs/evals/password-reset-smoke.sh
+```
+
+The script verifies the password reset contract: unknown email does not leak
+account existence, a reset token changes the password, existing sessions are
+revoked, the old password stops working, the new password works, and the token
+cannot be reused.
+
 ## Share + Soft Delete Smoke
 
 Runs against any live API (local stack or production):

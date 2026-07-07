@@ -163,4 +163,81 @@ impl AuthRepository for PostgresAuthRepository {
             .map(|_| ())
             .map_err(map_sqlx_error)
     }
+
+    async fn create_password_reset_token(
+        &self,
+        user_id: Uuid,
+        token_hash: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<(), RepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        sqlx::query(
+            "UPDATE password_reset_tokens SET used_at = now() \
+             WHERE user_id = $1 AND used_at IS NULL",
+        )
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        sqlx::query(
+            "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) \
+             VALUES ($1, $2, $3)",
+        )
+        .bind(user_id)
+        .bind(token_hash)
+        .bind(expires_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        tx.commit().await.map_err(map_sqlx_error)
+    }
+
+    async fn reset_password_with_token(
+        &self,
+        token_hash: &str,
+        now: DateTime<Utc>,
+        password_hash: &str,
+    ) -> Result<bool, RepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let reset = sqlx::query_as::<_, (Uuid, Uuid)>(
+            "SELECT id, user_id FROM password_reset_tokens \
+             WHERE token_hash = $1 AND expires_at > $2 AND used_at IS NULL \
+             FOR UPDATE",
+        )
+        .bind(token_hash)
+        .bind(now)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        let Some((reset_id, user_id)) = reset else {
+            tx.rollback().await.map_err(map_sqlx_error)?;
+            return Ok(false);
+        };
+
+        sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+            .bind(password_hash)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+
+        sqlx::query("UPDATE password_reset_tokens SET used_at = $1 WHERE id = $2")
+            .bind(now)
+            .bind(reset_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(true)
+    }
 }

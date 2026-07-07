@@ -31,11 +31,9 @@ The MVP should feel usable by one real person. The architecture should still be 
 
 Use a services-first architecture:
 
-- `apps/web`: TypeScript frontend.
-- `services/api`: Rust HTTP API.
-- `services/worker`: docs for the Rust background worker binary built by `services/api`.
-- `contracts`: shared API and schema documentation.
-- `docs`: architecture diagrams, deployment notes, and eval reports.
+- `frontend`: TypeScript/Next.js frontend.
+- `backend`: Rust HTTP API plus the worker binary entrypoint under `src/bin`.
+- `docs`: architecture notes, API docs, and deployment notes.
 
 The backend owns metadata, authorization, direct and resumable upload completion,
 quota enforcement, sync change logs, public share links, and cleanup jobs. File
@@ -46,30 +44,24 @@ bytes live in S3-compatible object storage. PostgreSQL stores durable metadata.
 Current structure:
 
 ```text
-apps/
-  web/
-contracts/
+frontend/
+backend/
 docs/
   api/
     bruno/
-infra/
-  railway/
-services/
-  api/
-  worker/
 ```
 
 Current deployable services:
 
-- `services/api`: Rust API and worker binaries with auth, direct/resumable upload, sharing, share links, sync, trash purge, folders, rename, move, and filename search.
-- `apps/web`: Next.js app with auth, `/drive`, folder browsing, file actions, sharing, share links, trash, resumable recovery, and command-palette search.
+- `backend`: Rust API and worker binaries with auth, direct/resumable upload, sharing, share links, sync, trash purge, folders, rename, move, and filename search.
+- `frontend`: Next.js app with auth, `/drive`, folder browsing, file actions, sharing, share links, trash, resumable recovery, and command-palette search.
 
 API documentation and runnable Bruno requests live in [docs/api](./docs/api/README.md).
 
 Run locally:
 
 ```bash
-cd services/api
+cd backend
 cargo test
 PORT=8080 cargo run
 curl http://127.0.0.1:8080/health
@@ -294,11 +286,11 @@ Initial deployment status:
 - Project: `drive-clone`.
 - API URL: `https://api-production-bcad4.up.railway.app`.
 - Web URL: `https://web-production-c3311.up.railway.app`.
-- API service source: `IsraelAraujo70/drive-clone`, branch `google-drive-clone-challenge`, root `/services/api`.
-- Web service source: `IsraelAraujo70/drive-clone`, branch `google-drive-clone-challenge`, root `/apps/web`.
+- API service source: `IsraelAraujo70/drive-clone`, branch `google-drive-clone-challenge`, root `/backend`.
+- Web service source: `IsraelAraujo70/drive-clone`, branch `google-drive-clone-challenge`, root `/frontend`.
 - Latest verified API deployment: `86164b07-f605-4724-9efb-32e3464baf9c`.
 - Latest verified web deployment: `ef2f4843-f122-400b-92ff-ec0157329d67`.
-- Product resources for Postgres, buckets, API, web, and worker are documented in `infra/railway`.
+- Product resources for Postgres, buckets, API, web, and worker live in Railway.
 
 ## Roadmap By Status
 
@@ -329,7 +321,7 @@ Delivered:
 - Shared download authorization.
 - Filename search.
 - Search indexes.
-- Access-control tests and smoke evals.
+- Access-control tests.
 
 Done: users can share a file with another registered user, revoke that access,
 and search accessible files without leaking private files.
@@ -343,7 +335,7 @@ Delivered:
 - Resume status endpoint.
 - Frontend resume behavior.
 - Worker-owned expiration cleanup job.
-- Tests and evals for interrupted uploads.
+- Tests for interrupted uploads.
 
 Done: selecting the same file again can resume from server-confirmed parts
 instead of restarting the full upload.
@@ -377,7 +369,7 @@ Deliver:
 
 Done when the repo can explain and demonstrate how the design moves from portfolio deployment toward the stated scale targets.
 
-## Tests and Evals
+## Tests
 
 Gate tests should be deterministic, local, fast, and run on every meaningful change.
 
@@ -403,7 +395,7 @@ Integration tests should cover:
 - Database migration correctness.
 - Railway-like environment configuration.
 
-Eval scenarios should cover:
+CI and end-to-end tests should cover:
 
 - 50 MB upload design review: the upload path sends file bytes directly to object storage and never requires the full file in API memory.
 - Direct upload correctness: upload bytes through the signed URL, complete the file, request a download URL, and byte-compare the result.
@@ -472,9 +464,6 @@ make logs
 make ps
 make down
 make test
-make eval-upload
-make eval-resumable
-make eval-password-reset
 make clean
 ```
 
@@ -485,7 +474,7 @@ Direct host-run commands still work when needed:
 docker compose up -d postgres minio minio-create-bucket
 
 # 2. Run the API (migrations run automatically on boot)
-cd services/api
+cd backend
 DATABASE_URL=postgres://postgres:postgres@localhost:5433/drive_clone \
 S3_ENDPOINT_URL=http://localhost:9000 \
 S3_PUBLIC_ENDPOINT_URL=http://localhost:9000 \
@@ -500,12 +489,12 @@ RESEND_FROM_EMAIL='Drive Clone <onboarding@resend.dev>' \
 cargo run
 
 # 3. Run the web app (in another terminal)
-cd apps/web
+cd frontend
 npm install
 npm run dev
 ```
 
-Environment examples live in `services/api/.env.example` and `apps/web/.env.example`.
+Environment examples live in `backend/.env.example` and `frontend/.env.example`.
 If the web dev server uses another port, add that exact origin to `CORS_ALLOWED_ORIGINS`, for example `http://localhost:3100`.
 Set `RESEND_API_KEY` in the API environment to send password reset emails
 through Resend. Without it, local reset links are logged by the API for
@@ -515,17 +504,11 @@ development.
 
 ```bash
 # API: unit + integration tests (integration tests need the compose Postgres up)
-cd services/api
+cd backend
 DATABASE_URL=postgres://postgres:postgres@localhost:5433/drive_clone cargo test
 
-# Upload smoke against the running API and MinIO
-cd ../..
-bash docs/evals/minio-upload-smoke.sh
-bash docs/evals/resumable-upload-smoke.sh
-bash docs/evals/password-reset-smoke.sh
-
 # Web: vitest
-cd apps/web
+cd frontend
 npm test
 ```
 
@@ -543,12 +526,12 @@ Implemented so far:
 - User-to-user file sharing by email, shared-with-me, and revoke.
 - Public revocable share links with uniform 404 for invalid, revoked, expired,
   or trashed targets.
-- Filename search with owned/shared ACL scoping, trash excluded by default, PostgreSQL search indexes, command-palette UI, and search smoke eval.
+- Filename search with owned/shared ACL scoping, trash excluded by default, PostgreSQL search indexes, and command-palette UI.
 - Sync change feed with tombstones and pagination.
 - Worker binary for expired resumable uploads, trash purge with quota decrement,
   orphan object cleanup, and quota reconciliation.
 - Argon2 password hashing; opaque bearer session tokens and reset tokens stored hashed (SHA-256), with reset tokens expiring after one hour and revoking existing sessions on use.
-- Auth contract in `contracts/auth.md`; files contract in `contracts/files.md`; migrations in `services/api/migrations`.
+- API docs in `docs/api/README.md`; migrations in `backend/migrations`.
 - Gate tests: API validation/token tests plus full HTTP auth/file/folder/share/trash/resumable-upload flows against real Postgres, and web tests.
 - Repo-connected Railway deployments for the API and web services.
 

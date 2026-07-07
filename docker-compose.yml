@@ -1,7 +1,7 @@
 services:
   api:
     build:
-      context: ./services/api
+      context: ./backend
       target: dev
     environment:
       HOST: 0.0.0.0
@@ -34,25 +34,29 @@ services:
     develop:
       watch:
         - action: sync+restart
-          path: ./services/api/src
+          path: ./backend/src
           target: /app/src
           initial_sync: true
         - action: sync+restart
-          path: ./services/api/migrations
+          path: ./backend/migrations
           target: /app/migrations
           initial_sync: true
         - action: sync+restart
-          path: ./services/api/build.rs
+          path: ./backend/tests
+          target: /app/tests
+          initial_sync: true
+        - action: sync+restart
+          path: ./backend/build.rs
           target: /app/build.rs
           initial_sync: true
         - action: rebuild
-          path: ./services/api/Cargo.toml
+          path: ./backend/Cargo.toml
         - action: rebuild
-          path: ./services/api/Cargo.lock
+          path: ./backend/Cargo.lock
 
   worker:
     build:
-      context: ./services/api
+      context: ./backend
       target: dev
     command: cargo run --bin drive-clone-worker
     environment:
@@ -80,25 +84,29 @@ services:
     develop:
       watch:
         - action: sync+restart
-          path: ./services/api/src
+          path: ./backend/src
           target: /app/src
           initial_sync: true
         - action: sync+restart
-          path: ./services/api/migrations
+          path: ./backend/migrations
           target: /app/migrations
           initial_sync: true
         - action: sync+restart
-          path: ./services/api/build.rs
+          path: ./backend/tests
+          target: /app/tests
+          initial_sync: true
+        - action: sync+restart
+          path: ./backend/build.rs
           target: /app/build.rs
           initial_sync: true
         - action: rebuild
-          path: ./services/api/Cargo.toml
+          path: ./backend/Cargo.toml
         - action: rebuild
-          path: ./services/api/Cargo.lock
+          path: ./backend/Cargo.lock
 
   web:
     build:
-      context: ./apps/web
+      context: ./frontend
       target: dev
     environment:
       NEXT_PUBLIC_API_BASE_URL: http://localhost:8080
@@ -110,16 +118,16 @@ services:
     develop:
       watch:
         - action: sync
-          path: ./apps/web
+          path: ./frontend
           target: /app
           initial_sync: true
           ignore:
             - node_modules/
             - .next/
         - action: rebuild
-          path: ./apps/web/package.json
+          path: ./frontend/package.json
         - action: rebuild
-          path: ./apps/web/package-lock.json
+          path: ./frontend/package-lock.json
 
   postgres:
     image: postgres:16

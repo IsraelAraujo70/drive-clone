@@ -11,7 +11,7 @@
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "eval:theme": "playwright test e2e/theme-mode.spec.ts"
+    "test:e2e:theme": "playwright test e2e/theme-mode.spec.ts"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

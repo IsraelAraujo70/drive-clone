@@ -1,13 +1,13 @@
 # Architecture Notes
 
-The first deployable service is the Rust API in `services/api`.
+The first deployable service is the Rust API in `backend`.
 
 ## Backend Layering
 
-`services/api` is organized as a ports-and-adapters Rust service.
+`backend` is organized as a ports-and-adapters Rust service.
 
 ```text
-services/api/src/
+backend/src/
   domain/
   application/
   adapters/
@@ -80,7 +80,7 @@ Rules:
 
 ## Current File Flow
 
-Upload and download keep the public contract in `contracts/files.md`:
+Upload and download keep the public contract documented in `docs/api/README.md`:
 
 Direct upload compatibility flow:
 
@@ -112,7 +112,7 @@ Only completed files become visible in drive browse/search/share/download flows.
 
 ## Background Worker
 
-`services/api` builds two binaries from the same crate:
+`backend` builds two binaries from the same crate:
 
 - `drive-clone-api`: Axum HTTP server.
 - `drive-clone-worker`: background job loop.
@@ -130,7 +130,7 @@ The worker runs SQLx migrations on startup, then repeats four jobs every
 
 Production checklist:
 
-- run the worker as a separate service using the same `services/api` source
+- run the worker as a separate service using the same `backend` source
 - set the same Postgres and S3 env vars as the API
 - set `TRASH_RETENTION_DAYS=30` unless product semantics change
 - watch logs for `job complete`, `job failed`, and quota divergence warnings

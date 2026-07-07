@@ -5,7 +5,7 @@ Base URLs:
 - Local Docker/API: `http://localhost:8080`
 - Production API: `https://api-production-bcad4.up.railway.app`
 
-The API is a Rust/Axum service under `services/api`. All request and response
+The API is a Rust/Axum service under `backend`. All request and response
 bodies are JSON unless noted. Authenticated endpoints use:
 
 ```http
@@ -500,7 +500,7 @@ Responses:
 
 Current upload scope: new clients should use resumable multipart uploads. The
 original direct single-object upload endpoint remains supported for compatibility
-and simple smoke tests.
+and Rust or TypeScript integration tests.
 
 ### `POST /files/uploads`
 
@@ -939,6 +939,6 @@ Response `200`:
 
 ```bash
 node scripts/generate-bruno-collection.mjs
-DATABASE_URL=postgres://postgres:postgres@localhost:5433/drive_clone cargo test --manifest-path services/api/Cargo.toml
-npm test --prefix apps/web
+DATABASE_URL=postgres://postgres:postgres@localhost:5433/drive_clone cargo test --manifest-path backend/Cargo.toml
+npm test --prefix frontend
 ```

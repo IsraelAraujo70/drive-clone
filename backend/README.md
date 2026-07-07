@@ -37,15 +37,6 @@ cargo test
 cargo run
 ```
 
-Useful live evals from the repo root:
-
-```bash
-bash docs/evals/minio-upload-smoke.sh
-bash docs/evals/resumable-upload-smoke.sh
-bash docs/evals/share-delete-smoke.sh
-bash docs/evals/folder-organization-smoke.sh
-```
-
 The server reads:
 
 - `HOST`, default `0.0.0.0`

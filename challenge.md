@@ -142,7 +142,7 @@ The finished project should include:
 - API documentation.
 - Database/schema documentation.
 - Tests for core behaviors.
-- Evaluation scenarios for resumable uploads, quota enforcement, sync behavior, and access control.
+- CI or end-to-end tests for resumable uploads, quota enforcement, sync behavior, and access control.
 - A short demo script or demo video outline.
 
 ## Success Criteria
@@ -157,7 +157,7 @@ The challenge is successful when:
 - Synchronization behavior is specified and testable.
 - The app is deployed or has a clear deploy path.
 - The README explains the architecture well enough for another engineer to review it.
-- The tests and evals provide evidence that the most important behaviors work.
+- The tests provide evidence that the most important behaviors work.
 
 ## Current Implementation Status
 
@@ -170,7 +170,7 @@ and QA, and demo polish.
 
 Status legend:
 
-- Done: implemented, documented, and covered by automated tests or smoke evals.
+- Done: implemented, documented, and covered by automated tests.
 - Partial: implemented enough for the portfolio MVP, but not the full long-term
   product behavior described in the challenge.
 - Remaining: not implemented or not verified in the latest pushed state.
@@ -180,29 +180,29 @@ Status legend:
 | Area | Status | Evidence | Remaining work |
 | --- | --- | --- | --- |
 | Authentication | Done | `POST /auth/signup`, `POST /auth/login`, `GET /auth/me`; API contract tests. | None for MVP. |
-| File upload | Done | Resumable multipart upload is the primary UI path; direct upload remains for compatibility; API contract tests and `docs/evals/minio-upload-smoke.sh`. | Production smoke after the latest commits. |
-| Upload progress | Done | Web upload progress and part progress in `apps/web/components/drive-shell.tsx`; web tests and resumable UI smoke. | Polish only. |
+| File upload | Done | Resumable multipart upload is the primary UI path; direct upload remains for compatibility; API contract tests. | Production smoke after the latest commits. |
+| Upload progress | Done | Web upload progress and part progress in `frontend/components/drive-shell.tsx`; web tests cover the client upload helpers. | Polish only. |
 | Upload limits and quota | Done | `MAX_FILE_SIZE_BYTES=52428800`, `storage_quota_bytes=52428800`; quota tests and signup contract assertion. | Production migration/deploy verification after the latest quota change. |
-| File download | Done | Authorized signed downloads for owner and grantee; byte-compare evals. | None for MVP. |
+| File download | Done | Authorized signed downloads for owner and grantee; API contract tests. | None for MVP. |
 | Unauthorized access prevention | Done | Contract tests cover private file denial, cross-user access denial, deleted-file denial, share revocation, and public-link failure modes. | None for MVP. |
 | File metadata | Done | PostgreSQL `files` and `folders` store name, owner, size, type, object key, state, timestamps, parent folder, delete state, and upload parts. | None for MVP. |
-| Folder management | Done | Create, browse, rename, move, recursive trash, restore, invalid cycle rejection; `folder-organization-smoke.sh`. | None for MVP. |
+| Folder management | Done | Create, browse, rename, move, recursive trash, restore, invalid cycle rejection; API contract tests. | None for MVP. |
 | Trash restore | Done | File and folder restore from trash in API and UI. | None for MVP. |
-| Force delete from trash | Done | UI `Force delete`; `DELETE /files/{file_id}/purge`; `DELETE /folders/{folder_id}/purge`; tests and real local smoke. | Production smoke after deploy. |
+| Force delete from trash | Done | UI `Force delete`; `DELETE /files/{file_id}/purge`; `DELETE /folders/{folder_id}/purge`; Rust and Playwright tests. | Production smoke after deploy. |
 | User-to-user file sharing | Done | Owner shares by registered email, grantee sees shared-with-me and can download, owner can revoke. | None for MVP. |
-| Public share links | Done | Create/list/revoke/resolve public links with expiry and uniform 404 on invalid/revoked/expired/trashed targets; `share-link-smoke.sh`. | None for MVP. |
+| Public share links | Done | Create/list/revoke/resolve public links with expiry and uniform 404 on invalid/revoked/expired/trashed targets; API contract tests. | None for MVP. |
 | Folder sharing | Partial | Folder deletion/restore affects shared descendant file access correctly. | Directly sharing whole folders is not implemented. Decide whether the portfolio needs folder-level grants or whether file-level sharing is enough. |
-| Search | Done | Filename search, ACL scoped, deleted excluded by default, owner's trash included only with `include_deleted=true`; `search-smoke.sh`. | None for MVP. |
-| Sync change feed | Done for contract/API | `GET /sync/changes` emits upserts and tombstones with stable cursor and pagination; `sync-changes-smoke.sh`. | No desktop or CLI sync client yet. Conflict handling is specified at a high level, not implemented in a real client. |
-| Resumable uploads | Done | Create session, upload parts, status endpoint, finalized multipart object, abandoned upload expiry, local resume UI using the same selected file; resumable tests and smoke evals. | Production resume smoke after latest deploy. |
-| Cleanup jobs | Done | Worker handles expired resumable uploads, trash purge, orphan cleanup, and quota reconciliation; `worker-jobs-smoke.sh`. | Operational monitoring dashboards are not built. |
-| Observability | Partial | Health endpoint, structured logs, worker job completion logs, eval scripts. | No metrics dashboard, alerting, or tracing backend. |
+| Search | Done | Filename search, ACL scoped, deleted excluded by default, owner's trash included only with `include_deleted=true`; API contract tests. | None for MVP. |
+| Sync change feed | Done for contract/API | `GET /sync/changes` emits upserts and tombstones with stable cursor and pagination; API contract tests. | No desktop or CLI sync client yet. Conflict handling is specified at a high level, not implemented in a real client. |
+| Resumable uploads | Done | Create session, upload parts, status endpoint, finalized multipart object, abandoned upload expiry, local resume UI using the same selected file; Rust and web tests. | Production resume smoke after latest deploy. |
+| Cleanup jobs | Done | Worker handles expired resumable uploads, trash purge, orphan cleanup, and quota reconciliation; Rust tests. | Operational monitoring dashboards are not built. |
+| Observability | Partial | Health endpoint, structured logs, and worker job completion logs. | No metrics dashboard, alerting, or tracing backend. |
 | Railway deployment | Partial | Railway-first config/docs exist and prior production upload/resume validation was performed. | Latest pushed changes still need Railway redeploy plus production smoke across upload, force delete, share, search, sync, and resume. |
-| API documentation | Done | `docs/api/README.md`, `contracts/files.md`, and Bruno collection under `docs/api/bruno`. | Keep generated Bruno collection refreshed after route changes. |
-| Database/schema documentation | Done | Migrations under `services/api/migrations`; architecture and API docs describe metadata model. | Optional ERD diagram. |
+| API documentation | Done | `docs/api/README.md` and Bruno collection under `docs/api/bruno`. | Keep generated Bruno collection refreshed after route changes. |
+| Database/schema documentation | Done | Migrations under `backend/migrations`; architecture and API docs describe metadata model. | Optional ERD diagram. |
 | Automated tests | Done | Rust unit tests, HTTP contract tests with real Postgres, web Vitest tests, Playwright e2e for theme and force delete. | Keep adding tests with feature changes. |
-| Evals | Done | Product copy, upload, resumable upload, resume UI, share/delete, share link, folder organization, search, sync changes, worker jobs. | Run full eval suite against production after redeploy. |
-| Demo script | Partial | README has manual demo flow and eval commands. | Write a short final demo script or record a demo video. |
+| End-to-end tests | Remaining | Legacy shell e2e scripts were removed from the repo. Future e2e coverage should live in TypeScript or Rust and run from CI/CD. | Add CI/CD-owned e2e suites for the most important product flows. |
+| Demo script | Partial | README has a manual demo flow. | Write a short final demo script or record a demo video. |
 
 ### What Is Left To Finish
 
@@ -233,5 +233,5 @@ Status legend:
    delete, and inspect sync changes.
 
 6. Run the final acceptance pass.
-   Run `make test`, all relevant `docs/evals/*.sh`, and browser QA on the
-   deployed URL. Save the command outputs or screenshots as final evidence.
+   Run `make test`, the future CI/CD e2e suite, and browser QA on the deployed
+   URL. Save the command outputs or screenshots as final evidence.

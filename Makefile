@@ -1,6 +1,6 @@
 COMPOSE ?= docker compose
 
-.PHONY: help dev watch up down restart logs ps test test-api test-web test-e2e test-all eval-frontend-components clean
+.PHONY: help dev watch up down restart logs ps test test-api test-web test-e2e test-all eval-frontend-components eval-production-upload-cors clean
 
 help:
 	@printf '%s\n' \
@@ -16,6 +16,7 @@ help:
 		'  make test-e2e     Run Cypress full-stack E2E tests' \
 		'  make test-all     Run gate tests and Cypress E2E tests' \
 		'  make eval-frontend-components  Check front-end component boundaries' \
+		'  make eval-production-upload-cors  Smoke production bucket CORS through a real upload' \
 		'  make clean        Stop containers and remove local volumes'
 
 dev:
@@ -53,6 +54,9 @@ test-all: test test-e2e
 
 eval-frontend-components:
 	bash docs/evals/frontend-component-boundaries.sh
+
+eval-production-upload-cors:
+	bash docs/evals/production-upload-cors-smoke.sh
 
 clean:
 	$(COMPOSE) down --volumes --remove-orphans

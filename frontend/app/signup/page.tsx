@@ -1,7 +1,7 @@
 import type { Metadata } from "next"
 
-import { Brand } from "@/components/brand"
-import { SignupForm } from "@/components/signup-form"
+import { SignupForm } from "@/components/auth/organisms/signup-form"
+import { AuthPageShell } from "@/components/auth/templates/auth-page-shell"
 
 export const metadata: Metadata = {
   title: "Sign up · Drive Clone",
@@ -9,9 +9,8 @@ export const metadata: Metadata = {
 
 export default function SignupPage() {
   return (
-    <div className="flex min-h-svh flex-col items-center justify-center gap-8 p-6">
-      <Brand />
+    <AuthPageShell>
       <SignupForm />
-    </div>
+    </AuthPageShell>
   )
 }

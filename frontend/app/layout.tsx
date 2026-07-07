@@ -2,7 +2,7 @@ import type { Metadata } from "next"
 import { Bricolage_Grotesque, IBM_Plex_Mono, Inter } from "next/font/google"
 
 import "./globals.css"
-import { ThemeProvider } from "@/components/theme-provider"
+import { ThemeProvider } from "@/components/theme/theme-provider"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { AuthProvider } from "@/lib/auth"
 import { cn } from "@/lib/utils"

@@ -7,7 +7,10 @@ export function Brand({ className }: { className?: string }) {
   return (
     <Link
       href="/"
-      className={cn("text-foreground flex items-center gap-3 font-semibold", className)}
+      className={cn(
+        "flex items-center gap-3 font-semibold text-foreground",
+        className
+      )}
     >
       <Image
         src="/logo.png"

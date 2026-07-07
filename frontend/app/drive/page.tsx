@@ -1,6 +1,6 @@
 import type { Metadata } from "next"
 
-import { DriveShell } from "@/components/drive-shell"
+import { DriveShell } from "@/components/drive/templates/drive-shell"
 import { RequireAuth } from "@/lib/auth"
 
 export const metadata: Metadata = {

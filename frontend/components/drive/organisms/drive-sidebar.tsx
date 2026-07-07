@@ -2,8 +2,9 @@
 
 import { HardDrive, Search, Share2, Trash2 } from "lucide-react"
 
-import { Brand } from "@/components/brand"
-import { useCommandMenu } from "@/components/command-menu"
+import { Brand } from "@/components/atoms/brand"
+import { useCommandMenu } from "@/components/command/organisms/command-menu-provider"
+import type { DriveView } from "@/components/drive/types"
 import { Progress } from "@/components/ui/progress"
 import {
   Sidebar,
@@ -18,15 +19,13 @@ import {
 import { useAuth } from "@/lib/auth"
 import { formatBytes } from "@/lib/format"
 
-export type DriveView = "my-drive" | "shared-with-me" | "trash"
-
 const sections = [
   { id: "my-drive" as const, title: "My Drive", icon: HardDrive },
   { id: "shared-with-me" as const, title: "Shared with me", icon: Share2 },
   { id: "trash" as const, title: "Trash", icon: Trash2 },
 ]
 
-export function AppSidebar({
+export function DriveSidebar({
   activeView,
   onViewChange,
 }: {

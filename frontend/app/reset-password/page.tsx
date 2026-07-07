@@ -1,7 +1,7 @@
 import type { Metadata } from "next"
 
-import { Brand } from "@/components/brand"
-import { ResetPasswordForm } from "@/components/reset-password-form"
+import { ResetPasswordForm } from "@/components/auth/organisms/reset-password-form"
+import { AuthPageShell } from "@/components/auth/templates/auth-page-shell"
 
 export const metadata: Metadata = {
   title: "Reset password · Drive Clone",
@@ -15,9 +15,8 @@ export default async function ResetPasswordPage({
   const { token = "" } = await searchParams
 
   return (
-    <div className="flex min-h-svh flex-col items-center justify-center gap-8 p-6">
-      <Brand />
+    <AuthPageShell>
       <ResetPasswordForm token={token} />
-    </div>
+    </AuthPageShell>
   )
 }

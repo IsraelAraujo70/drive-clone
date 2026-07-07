@@ -34,10 +34,9 @@ import {
 } from "@/components/ui/dialog"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { Spinner } from "@/components/ui/spinner"
+import type { DriveView } from "@/components/drive/types"
 import { api, type SearchFileResult } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
-
-type CommandMenuView = "my-drive" | "shared-with-me" | "trash"
 
 type CommandMenuContextValue = {
   open: boolean
@@ -61,7 +60,7 @@ export function CommandMenuProvider({
   onDownload,
 }: {
   children: ReactNode
-  onViewChange?: (view: CommandMenuView) => void
+  onViewChange?: (view: DriveView) => void
   onDownload?: (fileId: string) => void | Promise<void>
 }) {
   const router = useRouter()
@@ -154,7 +153,7 @@ export function CommandMenuProvider({
 
   const openMenu = () => setOpen(true)
 
-  const goToView = (view: CommandMenuView) => {
+  const goToView = (view: DriveView) => {
     if (onViewChange) {
       onViewChange(view)
       return

@@ -1,6 +1,6 @@
 COMPOSE ?= docker compose
 
-.PHONY: help dev watch up down restart logs ps test test-api test-web test-e2e test-all clean
+.PHONY: help dev watch up down restart logs ps test test-api test-web test-e2e test-all eval-frontend-components clean
 
 help:
 	@printf '%s\n' \
@@ -15,6 +15,7 @@ help:
 		'  make test         Run fast Rust and Vitest gate tests inside containers' \
 		'  make test-e2e     Run Cypress full-stack E2E tests' \
 		'  make test-all     Run gate tests and Cypress E2E tests' \
+		'  make eval-frontend-components  Check front-end component boundaries' \
 		'  make clean        Stop containers and remove local volumes'
 
 dev:
@@ -49,6 +50,9 @@ test-e2e:
 	$(COMPOSE) run --rm cypress
 
 test-all: test test-e2e
+
+eval-frontend-components:
+	bash docs/evals/frontend-component-boundaries.sh
 
 clean:
 	$(COMPOSE) down --volumes --remove-orphans

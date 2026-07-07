@@ -21,7 +21,7 @@ import {
   FieldLabel,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { PasswordInput } from "@/components/password-input"
+import { PasswordInput } from "@/components/auth/molecules/password-input"
 import { Spinner } from "@/components/ui/spinner"
 import { ApiError, api } from "@/lib/api"
 import { useAuth } from "@/lib/auth"

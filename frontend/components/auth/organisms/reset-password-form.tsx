@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { useState, type FormEvent } from "react"
 
-import { PasswordInput } from "@/components/password-input"
+import { PasswordInput } from "@/components/auth/molecules/password-input"
 import { Alert, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {

@@ -385,17 +385,17 @@ Required gate test coverage:
 - Part resume logic.
 - Sync cursor ordering.
 
-Integration tests should cover:
+Cypress full-stack tests cover:
 
 - Upload metadata plus object storage write.
 - Resumable multipart upload against MinIO.
 - Download authorization plus object storage read.
 - Delete and restore lifecycle.
 - Worker-owned expired upload cleanup, trash purge, orphan cleanup, and quota reconciliation.
-- Database migration correctness.
-- Railway-like environment configuration.
+- Browser-to-API-to-object-storage behavior with Docker services matching the
+  local deploy topology.
 
-CI and end-to-end tests should cover:
+CI and end-to-end tests should keep covering:
 
 - 50 MB upload design review: the upload path sends file bytes directly to object storage and never requires the full file in API memory.
 - Direct upload correctness: upload bytes through the signed URL, complete the file, request a download URL, and byte-compare the result.
@@ -503,14 +503,21 @@ development.
 ### Tests
 
 ```bash
-# API: unit + integration tests (integration tests need the compose Postgres up)
-cd backend
-DATABASE_URL=postgres://postgres:postgres@localhost:5433/drive_clone cargo test
+# Fast gate: Rust unit/use-case/domain tests plus Vitest
+make test
 
-# Web: vitest
-cd frontend
-npm test
+# Product integration: Cypress browser -> Next.js -> Rust API -> Postgres -> MinIO
+make test-e2e
+
+# Everything
+make test-all
 ```
+
+Cypress is the product-level integration suite. It runs through the real Docker
+stack and covers authentication, resumable upload, download byte comparison,
+sharing, ACL-scoped search, trash restore/purge, and upload recovery. Backend
+Rust tests remain focused on fast unit, use-case, domain, and storage-helper
+coverage.
 
 ## Current Status
 
@@ -532,7 +539,7 @@ Implemented so far:
   orphan object cleanup, and quota reconciliation.
 - Argon2 password hashing; opaque bearer session tokens and reset tokens stored hashed (SHA-256), with reset tokens expiring after one hour and revoking existing sessions on use.
 - API docs in `docs/api/README.md`; migrations in `backend/migrations`.
-- Gate tests: API validation/token tests plus full HTTP auth/file/folder/share/trash/resumable-upload flows against real Postgres, and web tests.
+- Gate tests: fast Rust unit/use-case/domain/storage-helper tests plus web Vitest tests. Cypress owns product-level HTTP integration through the real Docker stack.
 - Repo-connected Railway deployments for the API and web services.
 
 Next milestone: a local Rust sync client can consume the implemented sync API.

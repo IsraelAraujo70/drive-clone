@@ -33,9 +33,14 @@ HTTP handlers call use cases only. Use cases do not know about HTTP, SQL, S3, or
 Local commands:
 
 ```bash
-cargo test
+cargo test --lib --bins
 cargo run
 ```
+
+Backend tests stay fast and focused on domain rules, use cases, and storage
+helpers. Product-level HTTP integration is covered by the Cypress full-stack
+suite in `frontend/cypress/e2e`, which runs browser -> Next.js -> Rust API ->
+Postgres -> MinIO through Docker Compose.
 
 The server reads:
 

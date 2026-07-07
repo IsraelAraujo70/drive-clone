@@ -51,6 +51,7 @@ export function AppSidebar({
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton
+                data-cy="search-trigger"
                 tooltip="Search (⌘K)"
                 onClick={openMenu}
                 className="text-muted-foreground"
@@ -62,6 +63,13 @@ export function AppSidebar({
             {sections.map((section) => (
               <SidebarMenuItem key={section.title}>
                 <SidebarMenuButton
+                  data-cy={
+                    section.id === "shared-with-me"
+                      ? "nav-shared"
+                      : section.id === "trash"
+                        ? "nav-trash"
+                        : undefined
+                  }
                   tooltip={section.title}
                   isActive={section.id === activeView}
                   onClick={() => onViewChange(section.id)}
@@ -83,7 +91,7 @@ export function AppSidebar({
               {formatBytes(user.storage_quota_bytes)}
             </strong>
             <Progress value={usedPercent} aria-label="Storage usage" />
-            <span className="text-muted-foreground text-xs">Storage used</span>
+            <span className="text-xs text-muted-foreground">Storage used</span>
           </div>
         </SidebarFooter>
       )}

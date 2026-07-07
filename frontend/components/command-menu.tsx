@@ -8,7 +8,15 @@ import {
   type ReactNode,
 } from "react"
 import { useRouter } from "next/navigation"
-import { AlertCircle, FileIcon, HardDrive, LogOut, Search, Share2, Trash2 } from "lucide-react"
+import {
+  AlertCircle,
+  FileIcon,
+  HardDrive,
+  LogOut,
+  Search,
+  Share2,
+  Trash2,
+} from "lucide-react"
 
 import {
   Command,
@@ -18,7 +26,12 @@ import {
   CommandList,
   CommandSeparator,
 } from "@/components/ui/command"
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { Spinner } from "@/components/ui/spinner"
 import { api, type SearchFileResult } from "@/lib/api"
@@ -165,6 +178,7 @@ export function CommandMenuProvider({
         >
           <Command shouldFilter={false}>
             <CommandInput
+              data-cy="search-input"
               placeholder="Search files or jump to…"
               value={query}
               onValueChange={handleQueryChange}
@@ -198,8 +212,10 @@ export function CommandMenuProvider({
                       >
                         <FileIcon />
                         <div className="flex min-w-0 flex-col">
-                          <span className="truncate">{result.file.filename}</span>
-                          <span className="text-muted-foreground truncate text-xs">
+                          <span className="truncate">
+                            {result.file.filename}
+                          </span>
+                          <span className="truncate text-xs text-muted-foreground">
                             {result.access === "owned"
                               ? "My Drive"
                               : `Shared by ${result.owner?.display_name ?? "Unknown"}`}
@@ -245,7 +261,7 @@ export function CommandMenuProvider({
                 </CommandItem>
               </CommandGroup>
             </CommandList>
-            <div className="text-muted-foreground flex items-center justify-end gap-3 border-t px-3 py-2 text-xs">
+            <div className="flex items-center justify-end gap-3 border-t px-3 py-2 text-xs text-muted-foreground">
               <span className="flex items-center gap-1.5">
                 <KbdGroup>
                   <Kbd>↑</Kbd>

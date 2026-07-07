@@ -42,10 +42,6 @@ services:
           target: /app/migrations
           initial_sync: true
         - action: sync+restart
-          path: ./backend/tests
-          target: /app/tests
-          initial_sync: true
-        - action: sync+restart
           path: ./backend/build.rs
           target: /app/build.rs
           initial_sync: true
@@ -92,10 +88,6 @@ services:
           target: /app/migrations
           initial_sync: true
         - action: sync+restart
-          path: ./backend/tests
-          target: /app/tests
-          initial_sync: true
-        - action: sync+restart
           path: ./backend/build.rs
           target: /app/build.rs
           initial_sync: true
@@ -129,6 +121,66 @@ services:
         - action: rebuild
           path: ./frontend/package-lock.json
 
+  api-e2e:
+    profiles: ["e2e"]
+    build:
+      context: ./backend
+      target: dev
+    command: cargo run --bin drive-clone-api
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8080
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/drive_clone
+      CORS_ALLOWED_ORIGINS: http://web-e2e:3000
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_PUBLIC_ENDPOINT_URL: http://minio:9000
+      S3_BUCKET: drive-clone
+      S3_REGION: us-east-1
+      S3_URL_STYLE: path
+      S3_ACCESS_KEY_ID: minioadmin
+      S3_SECRET_ACCESS_KEY: minioadmin
+      MAX_FILE_SIZE_BYTES: 52428800
+      PRESIGNED_URL_TTL_SECONDS: 900
+      RESUMABLE_UPLOAD_TTL_SECONDS: 86400
+      PUBLIC_WEB_URL: http://web-e2e:3000
+      RESEND_FROM_EMAIL: Drive Clone <onboarding@resend.dev>
+      TRASH_RETENTION_DAYS: 30
+      WORKER_INTERVAL_SECONDS: 300
+    depends_on:
+      postgres:
+        condition: service_started
+      minio-create-bucket:
+        condition: service_completed_successfully
+    volumes:
+      - api_e2e_target:/app/target
+
+  web-e2e:
+    profiles: ["e2e"]
+    build:
+      context: ./frontend
+      target: dev
+    command: npm run dev -- --hostname 0.0.0.0 --port 3000
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://api-e2e:8080
+      NEXT_TELEMETRY_DISABLED: 1
+    depends_on:
+      - api-e2e
+
+  cypress:
+    profiles: ["e2e"]
+    image: cypress/included:15.18.0
+    working_dir: /e2e
+    entrypoint: ["sh", "-lc"]
+    command: ["npm ci && npx cypress run"]
+    environment:
+      CYPRESS_baseUrl: http://web-e2e:3000
+      CYPRESS_apiBaseUrl: http://api-e2e:8080
+    depends_on:
+      - web-e2e
+    volumes:
+      - ./frontend:/e2e
+      - cypress_node_modules:/e2e/node_modules
+
   postgres:
     image: postgres:16
     environment:
@@ -147,6 +199,7 @@ services:
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_API_CORS_ALLOW_ORIGIN: http://localhost:3000,http://127.0.0.1:3000,http://web-e2e:3000
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -157,14 +210,18 @@ services:
     image: minio/mc:latest
     depends_on:
       - minio
-    entrypoint: >
-      /bin/sh -c "
-      until /usr/bin/mc alias set local http://minio:9000 minioadmin minioadmin; do sleep 1; done;
-      /usr/bin/mc mb --ignore-existing local/drive-clone;
-      /usr/bin/mc anonymous set none local/drive-clone;
-      "
+    entrypoint:
+      - /bin/sh
+      - -lc
+      - |
+        set -e
+        until /usr/bin/mc alias set local http://minio:9000 minioadmin minioadmin; do sleep 1; done
+        /usr/bin/mc mb --ignore-existing local/drive-clone
+        /usr/bin/mc anonymous set none local/drive-clone
 
 volumes:
   api_target:
+  api_e2e_target:
+  cypress_node_modules:
   postgres_data:
   minio_data:

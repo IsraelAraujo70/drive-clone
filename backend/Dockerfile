@@ -13,7 +13,6 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY migrations ./migrations
-COPY tests ./tests
 COPY build.rs ./
 RUN cargo fetch
 

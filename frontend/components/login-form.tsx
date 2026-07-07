@@ -88,6 +88,7 @@ export function LoginForm() {
               <FieldLabel htmlFor="email">Email</FieldLabel>
               <Input
                 id="email"
+                data-cy="login-email"
                 type="email"
                 required
                 autoComplete="email"
@@ -115,6 +116,7 @@ export function LoginForm() {
                 </div>
                 <PasswordInput
                   id="password"
+                  data-cy="login-password"
                   required
                   autoComplete="current-password"
                   value={password}
@@ -132,7 +134,12 @@ export function LoginForm() {
           </FieldGroup>
         </CardContent>
         <CardFooter className="flex flex-col gap-4">
-          <Button type="submit" className="w-full" disabled={pending}>
+          <Button
+            type="submit"
+            data-cy="login-submit"
+            className="w-full"
+            disabled={pending}
+          >
             {pending && <Spinner data-icon="inline-start" />}
             {pending
               ? forgotMode

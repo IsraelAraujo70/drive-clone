@@ -87,6 +87,7 @@ export function SignupForm() {
               <FieldLabel htmlFor="name">Name</FieldLabel>
               <Input
                 id="name"
+                data-cy="signup-display-name"
                 type="text"
                 required
                 maxLength={100}
@@ -99,6 +100,7 @@ export function SignupForm() {
               <FieldLabel htmlFor="email">Email</FieldLabel>
               <Input
                 id="email"
+                data-cy="signup-email"
                 type="email"
                 required
                 autoComplete="email"
@@ -110,6 +112,7 @@ export function SignupForm() {
               <FieldLabel htmlFor="password">Password</FieldLabel>
               <PasswordInput
                 id="password"
+                data-cy="signup-password"
                 required
                 minLength={8}
                 maxLength={128}
@@ -126,6 +129,7 @@ export function SignupForm() {
               </FieldLabel>
               <PasswordInput
                 id="confirm-password"
+                data-cy="signup-confirm-password"
                 required
                 minLength={8}
                 maxLength={128}
@@ -143,6 +147,7 @@ export function SignupForm() {
         <CardFooter className="flex flex-col gap-4">
           <Button
             type="submit"
+            data-cy="signup-submit"
             className="w-full"
             disabled={pending || !passwordReady || password !== confirmPassword}
           >

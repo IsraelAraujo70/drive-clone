@@ -122,6 +122,7 @@ function HeaderSearch() {
   return (
     <button
       type="button"
+      data-cy="search-trigger"
       onClick={openMenu}
       className="flex w-full max-w-md items-center gap-2 rounded-lg border border-input bg-background px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent/40"
     >
@@ -395,6 +396,7 @@ function ShareDialog({
               <div className="flex gap-2">
                 <Input
                   id="share-email"
+                  data-cy="share-email-input"
                   type="email"
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
@@ -403,7 +405,11 @@ function ShareDialog({
                   disabled={submitting}
                   required
                 />
-                <Button type="submit" disabled={submitting || !email.trim()}>
+                <Button
+                  type="submit"
+                  data-cy="share-submit"
+                  disabled={submitting || !email.trim()}
+                >
                   {submitting && <Spinner data-icon="inline-start" />}
                   Share
                 </Button>
@@ -467,6 +473,7 @@ function ShareDialog({
             </div>
             <Button
               type="button"
+              data-cy="create-share-link"
               variant="outline"
               size="sm"
               onClick={() => void handleCreateLink()}
@@ -495,6 +502,7 @@ function ShareDialog({
             links.map((link) => (
               <div
                 key={link.id}
+                data-cy="public-share-link"
                 className="flex items-center gap-3 rounded-lg border border-border p-3"
               >
                 <div className="min-w-0 flex-1">
@@ -608,6 +616,7 @@ function CreateFolderDialog({
               <FieldLabel htmlFor="folder-name">Folder name</FieldLabel>
               <Input
                 id="folder-name"
+                data-cy="folder-name-input"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 aria-invalid={Boolean(error)}
@@ -618,7 +627,11 @@ function CreateFolderDialog({
             </Field>
           </FieldGroup>
           <DialogFooter>
-            <Button type="submit" disabled={submitting || !name.trim()}>
+            <Button
+              type="submit"
+              data-cy="folder-submit"
+              disabled={submitting || !name.trim()}
+            >
               {submitting && <Spinner data-icon="inline-start" />}
               Create
             </Button>
@@ -1140,7 +1153,7 @@ export function DriveShell() {
     setDownloadId(fileId)
     try {
       const response = await api.createDownload(token, fileId)
-      window.location.assign(response.download_url)
+      window.open(response.download_url, "_self")
     } catch (caught) {
       setError(getApiErrorMessage(caught))
     } finally {
@@ -1415,6 +1428,7 @@ export function DriveShell() {
 
             <input
               ref={inputRef}
+              data-cy="drive-upload-input"
               type="file"
               className="sr-only"
               onChange={(event) => {
@@ -1426,6 +1440,7 @@ export function DriveShell() {
             />
             <input
               ref={resumeInputRef}
+              data-cy="resume-upload-input"
               type="file"
               className="sr-only"
               onChange={(event) => {
@@ -1445,7 +1460,7 @@ export function DriveShell() {
             )}
 
             {uploadingName && (
-              <Card size="sm">
+              <Card size="sm" data-cy="upload-progress">
                 <CardHeader>
                   <CardDescription>Uploading</CardDescription>
                   <CardTitle className="truncate">{uploadingName}</CardTitle>
@@ -1460,8 +1475,8 @@ export function DriveShell() {
                   />
                   {uploadParts && uploadParts.total > 0 && (
                     <p className="text-sm text-muted-foreground">
-                      Part {Math.min(uploadParts.done + 1, uploadParts.total)} of{" "}
-                      {uploadParts.total}
+                      Part {Math.min(uploadParts.done + 1, uploadParts.total)}{" "}
+                      of {uploadParts.total}
                       {resumedFromPart !== null &&
                         ` — resumed from part ${resumedFromPart}`}
                     </p>
@@ -1471,7 +1486,7 @@ export function DriveShell() {
             )}
 
             {pendingUploads.length > 0 && !uploadingName && (
-              <Card size="sm">
+              <Card size="sm" data-cy="pending-upload-card">
                 <CardHeader>
                   <CardDescription>Interrupted uploads</CardDescription>
                   <CardTitle>
@@ -1506,42 +1521,47 @@ export function DriveShell() {
                             )
                           : null
                       return (
-                      <div
-                        key={pending.key}
-                        className="flex flex-col gap-3 rounded-lg border border-border p-3 sm:flex-row sm:items-center"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate font-medium">
-                            {pending.upload.filename}
+                        <div
+                          key={pending.key}
+                          className="flex flex-col gap-3 rounded-lg border border-border p-3 sm:flex-row sm:items-center"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate font-medium">
+                              {pending.upload.filename}
+                            </div>
+                            <div className="text-sm text-muted-foreground">
+                              {formatBytes(pending.upload.size_bytes)} expires{" "}
+                              {formatDate(pending.upload.expires_at)}
+                              {server && partsTotal !== null && (
+                                <>
+                                  {" · "}
+                                  {server.parts_received}/{partsTotal} parts
+                                  saved
+                                </>
+                              )}
+                            </div>
                           </div>
-                          <div className="text-sm text-muted-foreground">
-                            {formatBytes(pending.upload.size_bytes)} expires{" "}
-                            {formatDate(pending.upload.expires_at)}
-                            {server && partsTotal !== null && (
-                              <>
-                                {" · "}
-                                {server.parts_received}/{partsTotal} parts saved
-                              </>
-                            )}
+                          <div className="flex gap-2">
+                            <Button
+                              type="button"
+                              data-cy="dismiss-upload"
+                              variant="outline"
+                              onClick={() =>
+                                handleDismissPendingUpload(pending)
+                              }
+                            >
+                              Dismiss
+                            </Button>
+                            <Button
+                              type="button"
+                              data-cy="resume-upload"
+                              onClick={() => handleResumeUpload(pending)}
+                            >
+                              <Upload data-icon="inline-start" />
+                              Resume
+                            </Button>
                           </div>
                         </div>
-                        <div className="flex gap-2">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={() => handleDismissPendingUpload(pending)}
-                          >
-                            Dismiss
-                          </Button>
-                          <Button
-                            type="button"
-                            onClick={() => handleResumeUpload(pending)}
-                          >
-                            <Upload data-icon="inline-start" />
-                            Resume
-                          </Button>
-                        </div>
-                      </div>
                       )
                     })}
                   </div>
@@ -1592,6 +1612,7 @@ export function DriveShell() {
                     <>
                       <Button
                         variant="outline"
+                        data-cy="create-folder-button"
                         onClick={() => {
                           setDialogError(null)
                           setCreateFolderOpen(true)
@@ -1602,6 +1623,7 @@ export function DriveShell() {
                         New folder
                       </Button>
                       <Button
+                        data-cy="drive-upload-button"
                         onClick={() => inputRef.current?.click()}
                         disabled={Boolean(uploadingName)}
                       >
@@ -1637,7 +1659,10 @@ export function DriveShell() {
                     </EmptyHeader>
                     {activeView === "my-drive" && (
                       <EmptyContent>
-                        <Button onClick={() => inputRef.current?.click()}>
+                        <Button
+                          data-cy="drive-upload-button"
+                          onClick={() => inputRef.current?.click()}
+                        >
                           <Upload data-icon="inline-start" />
                           Upload file
                         </Button>
@@ -1649,6 +1674,7 @@ export function DriveShell() {
                     {visibleFolders.map((folder) => (
                       <div
                         key={folder.id}
+                        data-cy="folder-item"
                         className="flex items-center gap-3 rounded-lg border border-border p-3"
                       >
                         <button
@@ -1691,6 +1717,7 @@ export function DriveShell() {
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                               <Button
+                                data-cy="folder-actions"
                                 variant="outline"
                                 size="icon"
                                 aria-label="Folder actions"
@@ -1752,10 +1779,11 @@ export function DriveShell() {
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => void handleRestoreFolder(folder.id)}
+                              onClick={() =>
+                                void handleRestoreFolder(folder.id)
+                              }
                               disabled={
-                                restoreId === folder.id ||
-                                purgeId === folder.id
+                                restoreId === folder.id || purgeId === folder.id
                               }
                             >
                               {restoreId === folder.id ? (
@@ -1770,8 +1798,7 @@ export function DriveShell() {
                               size="sm"
                               onClick={() => void handlePurgeFolder(folder)}
                               disabled={
-                                purgeId === folder.id ||
-                                restoreId === folder.id
+                                purgeId === folder.id || restoreId === folder.id
                               }
                             >
                               {purgeId === folder.id ? (
@@ -1788,6 +1815,7 @@ export function DriveShell() {
                     {visibleFiles.map((file) => (
                       <div
                         key={file.id}
+                        data-cy="file-item"
                         className="flex items-center gap-3 rounded-lg border border-border p-3"
                       >
                         <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
@@ -1838,6 +1866,7 @@ export function DriveShell() {
                               <Button
                                 variant="outline"
                                 size="sm"
+                                data-cy="file-actions"
                                 onClick={() => {
                                   setDialogError(null)
                                   setRenameTarget({ kind: "file", item: file })
@@ -1861,6 +1890,7 @@ export function DriveShell() {
                               <Button
                                 variant="outline"
                                 size="sm"
+                                data-cy="share-action"
                                 onClick={() => setShareFile(file)}
                               >
                                 <Share2 data-icon="inline-start" />
